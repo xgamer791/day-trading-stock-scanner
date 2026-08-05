@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Live US equity scanner for day-trade HOD / premarket runners.
+ * Live US day-trade scanner.
  *
- * Primary universe: Nasdaq.com full stock screener (no $2B market-cap floor).
- * Yahoo "day_gainers" is intentionally NOT used — it requires marketCap >= $2B
- * and price >= $5, which hides the low-float runners day-trading apps show.
- *
- * Enrichment: Yahoo quote batch for day high / premarket / float when available.
+ * IMPORTANT:
+ * - Nasdaq.com screener % can lag and still show YESTERDAY's winners after the open.
+ *   We only use it as a symbol universe, then recompute TODAY's % from Yahoo live quotes.
+ * - Premarket tab = today's premarket / gap movers only.
+ * - Gainers tab = today's regular-session (open market) gainers only.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -55,7 +55,7 @@ async function getJson(url, headers = {}, attempt = 1) {
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`HTTP ${res.status} ${url}: ${body.slice(0, 160)}`);
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 140)}`);
   }
   return res.json();
 }
@@ -78,9 +78,7 @@ function isCommonEquity(row) {
   ) {
     return false;
   }
-  // Typical warrant/unit tickers: EOSEW, SHFSW, XXXWW
   if (/(WW|WS|WT|W)$/.test(sym) && sym.length >= 5) return false;
-  if (sym.endsWith("U") && name.includes("unit")) return false;
   return true;
 }
 
@@ -92,56 +90,151 @@ async function fetchNasdaqUniverse() {
     Referer: "https://www.nasdaq.com/",
   });
   const rows = data?.data?.rows;
-  if (!Array.isArray(rows) || rows.length === 0) {
+  if (!Array.isArray(rows) || !rows.length) {
     throw new Error("Nasdaq screener returned no rows");
   }
-  return rows
-    .filter(isCommonEquity)
-    .map((r) => ({
-      symbol: r.symbol,
-      name: r.name,
-      price: parseMoney(r.lastsale),
-      changePct: parseMoney(r.pctchange),
-      change: parseMoney(r.netchange),
-      volume: parseMoney(r.volume),
-      marketCap: parseMoney(r.marketCap),
-    }))
-    .filter((r) => r.symbol && r.price > 0);
+  return rows.filter(isCommonEquity).map((r) => ({
+    symbol: r.symbol,
+    name: r.name,
+    // NOTE: these Nasdaq fields can be prior-session stale — never rank by them alone
+    nasdaqPrice: parseMoney(r.lastsale),
+    nasdaqPct: parseMoney(r.pctchange),
+    nasdaqVolume: parseMoney(r.volume),
+  }));
 }
 
-async function fetchYahooQuotes(symbols) {
-  if (!symbols.length) return new Map();
-  const map = new Map();
-  const targets = symbols.slice(0, 30);
-
-  const fetchOne = async (symbol) => {
-    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d`;
+async function fetchYahooDayGainers(count = 50) {
+  try {
+    const url = `https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved?count=${count}&scrIds=day_gainers&formatted=false`;
     const data = await getJson(url);
-    const result = data?.chart?.result?.[0];
-    const meta = result?.meta;
-    if (!meta) return;
-    const highs = result?.indicators?.quote?.[0]?.high?.filter((n) => n != null) || [];
-    const lows = result?.indicators?.quote?.[0]?.low?.filter((n) => n != null) || [];
-    map.set(symbol, {
-      symbol,
-      regularMarketPrice: meta.regularMarketPrice,
-      regularMarketPreviousClose: meta.previousClose ?? meta.chartPreviousClose,
-      regularMarketDayHigh: highs.length ? Math.max(...highs) : meta.regularMarketPrice,
-      regularMarketDayLow: lows.length ? Math.min(...lows) : meta.regularMarketPrice,
-      regularMarketVolume: meta.regularMarketVolume,
-      preMarketPrice: meta.preMarketPrice,
-      preMarketChangePercent: meta.preMarketChangePercent,
-      postMarketPrice: meta.postMarketPrice,
-      postMarketChangePercent: meta.postMarketChangePercent,
-    });
-  };
+    return (data?.finance?.result?.[0]?.quotes || []).map((q) => q.symbol).filter(Boolean);
+  } catch (err) {
+    console.warn("Yahoo day_gainers unavailable:", err.message);
+    return [];
+  }
+}
 
-  // Limited concurrency to avoid rate limits
-  for (let i = 0; i < targets.length; i += 8) {
-    const chunk = targets.slice(i, i + 8);
-    await Promise.all(chunk.map((s) => fetchOne(s).catch(() => null)));
+async function fetchYahooMostActives(count = 50) {
+  try {
+    const url = `https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved?count=${count}&scrIds=most_actives&formatted=false`;
+    const data = await getJson(url);
+    return (data?.finance?.result?.[0]?.quotes || []).map((q) => q.symbol).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchLiveQuote(symbol) {
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`;
+  const data = await getJson(url);
+  const result = data?.chart?.result?.[0];
+  if (!result?.meta) return null;
+  const meta = result.meta;
+  const quote = result.indicators?.quote?.[0] || {};
+  const opens = (quote.open || []).filter((n) => n != null);
+  const highs = (quote.high || []).filter((n) => n != null);
+  const lows = (quote.low || []).filter((n) => n != null);
+  const volumes = (quote.volume || []).filter((n) => n != null);
+
+  const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
+  const last = Number(meta.regularMarketPrice) || 0;
+  const sessionOpen = opens.length ? Number(opens[0]) : last;
+  const dayHigh = highs.length ? Math.max(...highs, last) : last;
+  const dayLow = lows.length ? Math.min(...lows, last) : last;
+  const volume =
+    Number(meta.regularMarketVolume) ||
+    volumes.reduce((a, b) => a + b, 0) ||
+    0;
+
+  // Premarket: Yahoo may expose preMarket* during extended hours; otherwise use live last vs prev before the open.
+  const prePrice = meta.preMarketPrice != null ? Number(meta.preMarketPrice) : null;
+  const prePct =
+    meta.preMarketChangePercent != null
+      ? Number(meta.preMarketChangePercent)
+      : prePrice && prevClose
+        ? ((prePrice - prevClose) / prevClose) * 100
+        : null;
+
+  const dayChangePct = prevClose > 0 && last > 0 ? ((last - prevClose) / prevClose) * 100 : 0;
+  const gapPct =
+    prevClose > 0 && sessionOpen > 0 ? ((sessionOpen - prevClose) / prevClose) * 100 : 0;
+
+  // Timestamp sanity: regularMarketTime should be today ET
+  const tradeTimeMs = meta.regularMarketTime ? meta.regularMarketTime * 1000 : Date.now();
+
+  return {
+    symbol,
+    last,
+    prevClose,
+    sessionOpen,
+    dayHigh,
+    dayLow,
+    volume,
+    dayChangePct,
+    gapPct,
+    prePrice,
+    prePct,
+    tradeTimeMs,
+    name: meta.shortName || meta.longName || symbol,
+  };
+}
+
+async function fetchLiveQuotes(symbols) {
+  const map = new Map();
+  const unique = [...new Set(symbols)].filter(Boolean);
+  for (let i = 0; i < unique.length; i += 10) {
+    const chunk = unique.slice(i, i + 10);
+    const results = await Promise.all(
+      chunk.map((s) => fetchLiveQuote(s).catch(() => null)),
+    );
+    for (const q of results) {
+      if (q?.symbol && q.last > 0 && q.prevClose > 0) map.set(q.symbol, q);
+    }
   }
   return map;
+}
+
+function isTodayEt(ms) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return fmt.format(new Date(ms)) === fmt.format(new Date());
+}
+
+function toMover(q, changePct) {
+  const dayHigh = Math.max(q.dayHigh || q.last, q.last);
+  const hodDistancePct = dayHigh > 0 ? ((dayHigh - q.last) / dayHigh) * 100 : 0;
+  return {
+    symbol: q.symbol,
+    name: q.name,
+    price: q.last,
+    changePct,
+    change: q.last - q.prevClose,
+    volume: q.volume,
+    dayHigh,
+    dayLow: q.dayLow || q.last,
+    prevClose: q.prevClose,
+    floatMillions: null,
+    hodDistancePct,
+    atHod: hodDistancePct <= HOD_TOLERANCE_PCT,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function rank(movers, { minChangePct = 3, minPrice = 0.5, maxPrice = 100, minVolume = 1000, topN = 50 } = {}) {
+  return movers
+    .filter(
+      (m) =>
+        m.changePct >= minChangePct &&
+        m.price >= minPrice &&
+        m.price <= maxPrice &&
+        m.volume >= minVolume,
+    )
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, topN);
 }
 
 async function fetchNews(count = 40) {
@@ -159,134 +252,97 @@ async function fetchNews(count = 40) {
       tickers: (n.relatedTickers || []).slice(0, 6),
       summary: n.summary,
     }));
-  } catch (err) {
-    console.warn("News fetch failed:", err.message);
+  } catch {
     return [];
   }
 }
 
-function enrichMover(base, yahoo, mode) {
-  const y = yahoo?.get(base.symbol);
-  let price = base.price;
-  let changePct = base.changePct;
-  let change = base.change;
-  let volume = base.volume;
-  let dayHigh = price;
-  let dayLow = price;
-  let prevClose = price / (1 + changePct / 100);
-  let floatMillions = null;
-
-  if (y) {
-    prevClose = Number(y.regularMarketPreviousClose) || prevClose;
-    dayHigh = Number(y.regularMarketDayHigh) || dayHigh;
-    dayLow = Number(y.regularMarketDayLow) || dayLow;
-    volume = Number(y.regularMarketVolume) || volume;
-    if (y.floatShares) floatMillions = Number(y.floatShares) / 1e6;
-
-    if (mode === "premarket" && y.preMarketPrice != null) {
-      price = Number(y.preMarketPrice);
-      changePct = Number(y.preMarketChangePercent) || changePct;
-      change = Number(y.preMarketChange) || price - prevClose;
-    } else if (mode === "afterhours" && y.postMarketPrice != null) {
-      price = Number(y.postMarketPrice);
-      changePct = Number(y.postMarketChangePercent) || changePct;
-    } else if (y.regularMarketPrice != null) {
-      price = Number(y.regularMarketPrice);
-      // Keep Nasdaq % as primary for ranking consistency with full-market movers;
-      // fall back to Yahoo % only if Nasdaq missing
-      if (!Number.isFinite(changePct) || changePct === 0) {
-        changePct =
-          ((price - prevClose) / prevClose) * 100 ||
-          Number(y.regularMarketChangePercent) ||
-          0;
-      }
-    }
-    dayHigh = Math.max(dayHigh, price);
-  }
-
-  const hodDistancePct = dayHigh > 0 ? ((dayHigh - price) / dayHigh) * 100 : 0;
-  const atHod = hodDistancePct <= HOD_TOLERANCE_PCT;
-
-  return {
-    symbol: base.symbol,
-    name: base.name || y?.shortName,
-    price,
-    changePct,
-    change,
-    volume,
-    dayHigh,
-    dayLow,
-    prevClose,
-    floatMillions,
-    hodDistancePct,
-    atHod,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function rank(list, { minChangePct = 3, minPrice = 0.5, maxPrice = 100, minVolume = 1000, topN = 50 } = {}) {
-  return list
-    .filter(
-      (m) =>
-        m.changePct >= minChangePct &&
-        m.price >= minPrice &&
-        m.price <= maxPrice &&
-        m.volume >= minVolume,
-    )
-    .sort((a, b) => b.changePct - a.changePct)
-    .slice(0, topN);
-}
-
 async function main() {
   const session = sessionNow();
-  console.log(`Fetching full-market movers (session=${session})…`);
+  console.log(`Building TODAY's scanner (session=${session})…`);
 
-  const [universe, news] = await Promise.all([fetchNasdaqUniverse(), fetchNews(40)]);
+  const [universe, yahooGainers, yahooActives, news] = await Promise.all([
+    fetchNasdaqUniverse(),
+    fetchYahooDayGainers(50),
+    fetchYahooMostActives(50),
+    fetchNews(40),
+  ]);
 
-  // Top candidates by Nasdaq % — includes micro/low-float names Yahoo hides
-  const candidates = [...universe]
-    .filter((r) => r.changePct >= 3 && r.price >= 0.5 && r.price <= 150)
-    .sort((a, b) => b.changePct - a.changePct)
+  // Candidate pool: high Nasdaq volume + extreme prior % (may be stale) + Yahoo live lists
+  const byVol = [...universe].sort((a, b) => b.nasdaqVolume - a.nasdaqVolume).slice(0, 120);
+  const byPct = [...universe]
+    .filter((r) => r.nasdaqPct >= 5)
+    .sort((a, b) => b.nasdaqPct - a.nasdaqPct)
     .slice(0, 120);
 
-  if (candidates.length === 0) {
-    throw new Error("No live gainers found in Nasdaq universe");
+  const candidateSymbols = [
+    ...yahooGainers,
+    ...yahooActives,
+    ...byVol.map((r) => r.symbol),
+    ...byPct.map((r) => r.symbol),
+  ];
+
+  console.log(`Enriching ${new Set(candidateSymbols).size} symbols with live Yahoo quotes…`);
+  const live = await fetchLiveQuotes(candidateSymbols);
+  const quotes = [...live.values()].filter((q) => isTodayEt(q.tradeTimeMs));
+
+  if (quotes.length < 10) {
+    throw new Error(
+      `Too few live quotes for today (got ${quotes.length}). Refusing to publish stale data.`,
+    );
   }
 
-  const yahoo = await fetchYahooQuotes(candidates.map((c) => c.symbol));
+  // --- Premarket tab: today's gap / premarket % only ---
+  let premarketMovers = [];
+  if (session === "premarket") {
+    premarketMovers = quotes.map((q) => {
+      const pct =
+        q.prePct != null
+          ? q.prePct
+          : q.dayChangePct; // before open, last print is effectively extended-hours
+      const price = q.prePrice != null ? q.prePrice : q.last;
+      return toMover({ ...q, last: price }, pct);
+    });
+  } else {
+    // After the open: Premarket tab shows TODAY's gap (open vs prior close), not day gainers
+    premarketMovers = quotes.map((q) => toMover(q, q.gapPct));
+  }
 
-  const preMode = session === "premarket" ? "premarket" : "regular";
-  const enriched = candidates.map((c) => enrichMover(c, yahoo, preMode));
+  // --- Gainers tab: open-market (regular session) only ---
+  let gainerMovers = [];
+  if (session === "premarket") {
+    gainerMovers = []; // market not open yet
+  } else if (session === "closed") {
+    gainerMovers = [];
+  } else {
+    // regular / afterhours: today's change vs prior close from LIVE last price
+    gainerMovers = quotes.map((q) => toMover(q, q.dayChangePct));
+  }
 
-  // Premarket panel: use premarket quotes when available, else Nasdaq %
-  const premarketEnriched = candidates.map((c) =>
-    enrichMover(c, yahoo, session === "premarket" ? "premarket" : "regular"),
-  );
-
-  const gainers = rank(enriched, {
-    minChangePct: 5,
+  const premarket = rank(premarketMovers, {
+    minChangePct: session === "premarket" ? 2 : 3,
     minPrice: 0.5,
-    maxPrice: 100,
-    minVolume: 1000,
+    maxPrice: 80,
+    minVolume: session === "premarket" ? 500 : 5000,
     topN: 50,
   });
 
-  const premarket = rank(premarketEnriched, {
-    minChangePct: session === "premarket" ? 2 : 5,
+  const gainers = rank(gainerMovers, {
+    minChangePct: 3,
     minPrice: 0.5,
-    maxPrice: 50,
-    minVolume: 500,
+    maxPrice: 500,
+    minVolume: 10000,
     topN: 50,
   });
 
-  if (gainers.length === 0) {
-    throw new Error("No live gainers after filters");
+  if (session !== "premarket" && gainers.length === 0) {
+    throw new Error("No live open-market gainers found for today");
   }
 
   const payload = {
     session,
     updatedAt: new Date().toISOString(),
-    source: "nasdaq",
+    source: "live",
     news,
     premarket,
     gainers,
@@ -294,18 +350,23 @@ async function main() {
 
   await mkdir(path.dirname(OUT), { recursive: true });
   await writeFile(OUT, JSON.stringify(payload, null, 2));
+
   console.log(
-    `Wrote ${OUT} — news=${news.length} premarket=${premarket.length} gainers=${gainers.length}`,
+    `Wrote ${OUT} — premarket=${premarket.length} gainers=${gainers.length} news=${news.length}`,
   );
   console.log(
-    "Top gainers:",
+    "Gainers:",
     gainers
-      .slice(0, 10)
-      .map(
-        (m) =>
-          `${m.symbol} ${m.changePct.toFixed(1)}%${m.atHod ? " HOD" : ""}${m.floatMillions ? ` flt=${m.floatMillions.toFixed(1)}M` : ""}`,
-      )
-      .join(", "),
+      .slice(0, 8)
+      .map((m) => `${m.symbol} ${m.changePct.toFixed(1)}%`)
+      .join(", ") || "(none — premarket)",
+  );
+  console.log(
+    "Premarket/gaps:",
+    premarket
+      .slice(0, 8)
+      .map((m) => `${m.symbol} ${m.changePct.toFixed(1)}%`)
+      .join(", ") || "(none)",
   );
 }
 

@@ -84,11 +84,9 @@ export function ScannerBoard() {
   const sourceLabel =
     data?.source === "polygon"
       ? "POLYGON"
-      : data?.source?.startsWith("nasdaq")
-        ? "NASDAQ LIVE"
-        : data
-          ? "LIVE"
-          : "LOADING";
+      : data
+        ? "LIVE TODAY"
+        : "LOADING";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -226,13 +224,23 @@ export function ScannerBoard() {
           }}
         >
           <PanelHeader
-            title="Premarket HOD Gainers"
-            subtitle="Live premarket / early runners — HOD peaks flagged"
+            title="Premarket"
+            subtitle={
+              data?.session === "premarket"
+                ? "Today's premarket movers only"
+                : "Today's gap / premarket plays (open vs prior close)"
+            }
             count={data?.premarket.length ?? 0}
           />
           <StockTable
             rows={data?.premarket ?? []}
-            emptyText={error ? "Live data error" : "Loading live premarket movers…"}
+            emptyText={
+              error
+                ? "Live data error"
+                : data?.session === "premarket"
+                  ? "Loading today's premarket movers…"
+                  : "No significant gaps from today's premarket"
+            }
           />
         </section>
 
@@ -242,12 +250,22 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Market Top Gainers"
-            subtitle="Live day gainers — stocks at/near high of day flagged"
+            subtitle={
+              data?.session === "premarket"
+                ? "Opens at 9:30 AM ET — regular session gainers only"
+                : "Today's open-market gainers (live vs prior close)"
+            }
             count={data?.gainers.length ?? 0}
           />
           <StockTable
             rows={data?.gainers ?? []}
-            emptyText={error ? "Live data error" : "Loading live market gainers…"}
+            emptyText={
+              error
+                ? "Live data error"
+                : data?.session === "premarket"
+                  ? "Market not open yet"
+                  : "Loading today's market gainers…"
+            }
           />
         </section>
       </main>
