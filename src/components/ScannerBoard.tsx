@@ -132,8 +132,8 @@ export function ScannerBoard() {
             alignItems: "center",
             gap: 16,
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            color: "var(--text-dim)",
+            fontSize: 12,
+            color: "var(--text)",
           }}
         >
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
