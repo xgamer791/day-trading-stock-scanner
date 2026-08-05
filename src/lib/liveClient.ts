@@ -4,19 +4,16 @@
  * Every ~3s poll (no mover-row cache):
  *  1) Nasdaq Most Advanced (discovery)
  *  2) Yahoo day_gainers — price, prevClose, volume, impliedSharesOutstanding
- *     from the SAME live payload
  *  3) Yahoo spark ONLY for Most Advanced symbols missing from day_gainers (≤30)
- *  4) Rank by same-quote % — top 50
+ *  4) ONE live Nasdaq screener download → marketCap map for Flt (not for %)
+ *  5) Rank by same-quote % — top 50; Flt = day_gainers shares OR marketCap/price
  *
  * FORBIDDEN: live.json, floats.json, last-tick-as-LIVE, localStorage, etc.
- * Flt comes from the live day_gainers quote each poll (Realtime parity field).
+ * Never use Nasdaq % with Yahoo last. Never N× per-symbol summary (proxy death).
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
-/** Max Nasdaq summary calls for Flt per poll — more than this burns CORS proxies (~15s reconnect loops). */
-const FLOAT_FILL_MAX = 8;
-const FLOAT_FILL_BUDGET_MS = 2500;
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
@@ -75,20 +72,6 @@ async function fetchTextViaProxy(url: string, timeoutMs = 7000): Promise<string>
 
 async function fetchViaProxy(url: string, timeoutMs = 7000): Promise<unknown> {
   return JSON.parse(await fetchTextViaProxy(url, timeoutMs));
-}
-
-async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => resolve(fallback), ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function parseMoney(v: unknown): number {
@@ -303,11 +286,11 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote
   return map;
 }
 
-/** Parse Nasdaq summary MarketCap strings like "$96.85M" / "1,052,627,659". */
+/** Parse Nasdaq screener / summary marketCap values. */
 function parseMarketCapDollars(v: unknown): number | null {
   if (v == null) return null;
   let s = String(v).trim().toUpperCase().replace(/[$,\s]/g, "");
-  if (!s || s === "N/A" || s === "UNAVALIABLE" || s === "UNAVAILABLE") return null;
+  if (!s || s === "N/A" || s === "UNAVALIABLE" || s === "UNAVAILABLE" || s === "0") return null;
   let mult = 1;
   if (s.endsWith("T")) {
     mult = 1e12;
@@ -328,41 +311,44 @@ function parseMarketCapDollars(v: unknown): number | null {
 }
 
 /**
- * Live Flt for Most Advanced / spark rows (not in Yahoo day_gainers).
- * Realtime parity: marketCap / live price ≈ impliedSharesOutstanding.
- * Best-effort only — must NEVER throw or burn proxies (25 summaries/poll caused
- * "Load failed" reconnect loops ~every 15s). Cap + deadline; no floats.json.
+ * ONE live Nasdaq download → symbol → marketCap (dollars).
+ * Used only for Flt (= marketCap / livePrice). Never for displayed %.
+ * Soft-fail: empty map on proxy errors — must not kill the quote poll.
  */
-async function fetchLiveFloatThisPoll(
-  rows: Array<{ symbol: string; price: number }>,
-): Promise<Map<string, number>> {
-  const need = rows
-    .filter((r) => r.symbol && r.price > 0)
-    .slice(0, FLOAT_FILL_MAX)
-    .map((r) => ({ symbol: r.symbol.toUpperCase(), price: r.price }));
+async function fetchNasdaqMarketCapsLive(): Promise<Map<string, number>> {
   const out = new Map<string, number>();
-  if (!need.length) return out;
-
-  const started = Date.now();
-  // Sequential on sticky proxy — parallel summary storms kill CORS quota.
-  for (const { symbol, price } of need) {
-    if (Date.now() - started > FLOAT_FILL_BUDGET_MS) break;
-    try {
-      const data = (await fetchViaProxy(
-        `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,
-        3500,
-      )) as {
-        data?: { summaryData?: { MarketCap?: { value?: string } } };
-      };
-      const mcap = parseMarketCapDollars(data?.data?.summaryData?.MarketCap?.value);
-      if (mcap == null || !(price > 0)) continue;
-      const millions = mcap / price / 1_000_000;
-      if (Number.isFinite(millions) && millions > 0) out.set(symbol, millions);
-    } catch {
-      /* leave empty — do not fail the quote poll */
+  try {
+    const data = (await fetchViaProxy(
+      "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true",
+      12000,
+    )) as { data?: { rows?: Array<Record<string, string>> } };
+    for (const r of data?.data?.rows || []) {
+      const sym = String(r.symbol || "")
+        .replace("/", "-")
+        .toUpperCase();
+      if (!sym || isJunk(sym, r.name || "")) continue;
+      const mcap = parseMarketCapDollars(r.marketCap);
+      if (mcap != null) out.set(sym, mcap);
     }
+  } catch {
+    /* Flt blank this poll — quotes still live */
   }
   return out;
+}
+
+function applyLiveFloat(
+  movers: StockMover[],
+  marketCaps: Map<string, number>,
+): StockMover[] {
+  if (!marketCaps.size) return movers;
+  return movers.map((m) => {
+    if (m.floatMillions != null) return m;
+    const mcap = marketCaps.get(m.symbol.toUpperCase());
+    if (mcap == null || !(m.price > 0)) return m;
+    const millions = mcap / m.price / 1_000_000;
+    if (!Number.isFinite(millions) || !(millions > 0)) return m;
+    return { ...m, floatMillions: millions };
+  });
 }
 
 function toMover(q: LiveQuote): StockMover {
@@ -391,12 +377,15 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
 
   let advanced: Seed[] = [];
   let quotes = new Map<string, LiveQuote>();
+  let marketCaps = new Map<string, number>();
   let yahooErr: Error | null = null;
   let advancedErr: Error | null = null;
 
-  const [advRes, yahooRes] = await Promise.allSettled([
+  // Quotes + bulk marketCap in parallel (Flt only from marketCap — never Nasdaq %).
+  const [advRes, yahooRes, mcapRes] = await Promise.allSettled([
     fetchMostAdvanced(),
     fetchYahooDayGainerQuotes(),
+    fetchNasdaqMarketCapsLive(),
   ]);
 
   if (advRes.status === "fulfilled") advanced = advRes.value;
@@ -404,6 +393,8 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
 
   if (yahooRes.status === "fulfilled") quotes = yahooRes.value;
   else yahooErr = yahooRes.reason instanceof Error ? yahooRes.reason : new Error(String(yahooRes.reason));
+
+  if (mcapRes.status === "fulfilled") marketCaps = mcapRes.value;
 
   const missing = advanced.map((s) => s.symbol).filter((s) => !quotes.has(s));
   if (missing.length) {
@@ -424,37 +415,17 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     throw yahooErr || advancedErr || new Error("Live Yahoo spark failed");
   }
 
-  let movers = [...quotes.values()]
-    .map(toMover)
-    .filter((m) => {
-      const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
-      return Math.abs(recomputed - m.changePct) < 0.05;
-    })
-    .sort((a, b) => b.changePct - a.changePct)
-    .slice(0, FEED_LIMIT);
-
-  // Best-effort live Flt for spark-only rows — never fail price/%/vol for Flt.
-  const needFlt = movers
-    .filter((m) => m.floatMillions == null)
-    .map((m) => ({ symbol: m.symbol, price: m.price }));
-  if (needFlt.length) {
-    try {
-      const liveFlt = await withDeadline(
-        fetchLiveFloatThisPoll(needFlt),
-        FLOAT_FILL_BUDGET_MS,
-        new Map<string, number>(),
-      );
-      if (liveFlt.size) {
-        movers = movers.map((m) =>
-          m.floatMillions != null
-            ? m
-            : { ...m, floatMillions: liveFlt.get(m.symbol.toUpperCase()) ?? null },
-        );
-      }
-    } catch {
-      /* quotes already live — leave Flt blank this poll */
-    }
-  }
+  const movers = applyLiveFloat(
+    [...quotes.values()]
+      .map(toMover)
+      .filter((m) => {
+        const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
+        return Math.abs(recomputed - m.changePct) < 0.05;
+      })
+      .sort((a, b) => b.changePct - a.changePct)
+      .slice(0, FEED_LIMIT),
+    marketCaps,
+  );
 
   if (session !== "premarket" && session !== "closed" && movers.length < 3) {
     throw new Error(`Live quotes unavailable (${movers.length})`);
