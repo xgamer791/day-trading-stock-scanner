@@ -160,8 +160,12 @@ async function fetchYahooQuote(symbol) {
   const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
   const last = Number(meta.regularMarketPrice) || 0;
   const sessionOpen = opens.length ? Number(opens[0]) : last;
-  const dayHigh = highs.length ? Math.max(...highs, last) : last;
-  const dayLow = lows.length ? Math.min(...lows, last) : last;
+  const metaHigh = Number(meta.regularMarketDayHigh) || 0;
+  const metaLow = Number(meta.regularMarketDayLow) || 0;
+  const dayHigh = Math.max(last, metaHigh, ...(highs.length ? highs : [0]));
+  const dayLow = lows.length || metaLow
+    ? Math.min(last, metaLow || last, ...(lows.length ? lows : [last]))
+    : last;
   const volume =
     Number(meta.regularMarketVolume) || volumes.reduce((a, b) => a + b, 0) || 0;
 
@@ -175,9 +179,11 @@ async function fetchYahooQuote(symbol) {
 
   if (last <= 0 || prevClose <= 0) return null;
 
+  // Realtime Screener "HOD %" = live last vs previous close (same quote)
   const dayChangePct = ((last - prevClose) / prevClose) * 100;
   const gapPct = ((sessionOpen - prevClose) / prevClose) * 100;
   const hodDistancePct = dayHigh > 0 ? ((dayHigh - last) / dayHigh) * 100 : 0;
+  const hodGainPct = ((dayHigh - prevClose) / prevClose) * 100;
 
   return {
     symbol,
@@ -193,6 +199,7 @@ async function fetchYahooQuote(symbol) {
     prePrice,
     prePct,
     hodDistancePct,
+    hodGainPct,
   };
 }
 
@@ -227,18 +234,32 @@ function mergeUniverse(screener, advanced) {
   return [...bySym.values()].sort((a, b) => b.changePct - a.changePct);
 }
 
-function toMover(seed, q = null) {
+function toMover(seed, q = null, pctOverride = null) {
   const price = q?.last > 0 ? q.last : seed.price;
-  const prevClose = q?.prevClose > 0 ? q.prevClose : price / (1 + seed.changePct / 100);
+  const prevClose =
+    q?.prevClose > 0
+      ? q.prevClose
+      : seed.changePct
+        ? price / (1 + seed.changePct / 100)
+        : price;
   const dayHigh = q?.dayHigh > 0 ? Math.max(q.dayHigh, price) : price;
   const dayLow = q?.dayLow > 0 ? q.dayLow : price;
   const volume = q?.volume > 0 ? q.volume : seed.volume || 0;
-  const changePct =
-    q && Number.isFinite(q.dayChangePct) && q.dayChangePct !== 0
-      ? // Prefer Nasdaq screener/Most Advanced % for ranking parity with Realtime
-        seed.changePct
-      : seed.changePct;
+
+  // ALWAYS derive % from the same last/prevClose shown in the row (Realtime parity).
+  // Never keep a stale Nasdaq screener % next to a live Yahoo last.
+  let changePct;
+  if (pctOverride != null && Number.isFinite(pctOverride)) {
+    changePct = pctOverride;
+  } else if (q && prevClose > 0 && price > 0) {
+    changePct = ((price - prevClose) / prevClose) * 100;
+  } else {
+    changePct = seed.changePct;
+  }
+
   const hodDistancePct = dayHigh > 0 ? ((dayHigh - price) / dayHigh) * 100 : 0;
+  const hodGainPct =
+    prevClose > 0 ? ((dayHigh - prevClose) / prevClose) * 100 : changePct;
 
   return {
     symbol: seed.symbol,
@@ -252,6 +273,7 @@ function toMover(seed, q = null) {
     prevClose,
     floatMillions: null,
     hodDistancePct,
+    hodGainPct,
     atHod: hodDistancePct <= 2,
     updatedAt: new Date().toISOString(),
   };
@@ -297,8 +319,8 @@ async function main() {
   const merged = mergeUniverse(screener, advanced);
   if (merged.length < 10) throw new Error(`Too few gainers after merge (${merged.length})`);
 
-  // Pull enough headroom so Yahoo enrichment can't shrink the visible top 20
-  const candidates = merged.slice(0, 60);
+  // Discover from full US screener, then re-rank on live last vs prevClose
+  const candidates = merged.slice(0, 80);
   const quotes = await fetchLiveQuotes(candidates.map((c) => c.symbol));
 
   let premarket = [];
@@ -307,12 +329,15 @@ async function main() {
   if (session === "premarket") {
     const rows = candidates.map((seed) => {
       const q = quotes.get(seed.symbol);
-      if (q && (q.prePct != null || q.dayChangePct != null)) {
-        const pct = q.prePct != null ? q.prePct : q.dayChangePct;
-        const price = q.prePrice != null ? q.prePrice : q.last;
-        return toMover({ ...seed, changePct: pct, price }, { ...q, last: price, dayChangePct: pct });
-      }
-      return toMover(seed, q);
+      if (!q) return toMover(seed, null);
+      const price = q.prePrice != null ? q.prePrice : q.last;
+      const pct =
+        q.prePct != null
+          ? q.prePct
+          : q.prevClose > 0
+            ? ((price - q.prevClose) / q.prevClose) * 100
+            : seed.changePct;
+      return toMover(seed, { ...q, last: price }, pct);
     });
     premarket = topGainers(rows);
     gainers = [];
@@ -320,15 +345,14 @@ async function main() {
     premarket = [];
     gainers = [];
   } else {
-    // Regular / after-hours: full-market top % gainers (Realtime Screener style)
-    const rows = candidates.map((seed) => toMover(seed, quotes.get(seed.symbol)));
+    // Regular / after-hours: rank by live (last - prevClose) / prevClose
+    const rows = candidates.map((seed) => toMover(seed, quotes.get(seed.symbol) || null));
     gainers = topGainers(rows);
 
-    // Premarket panel shows gap leaders from the same full-market set
     const gaps = candidates.map((seed) => {
       const q = quotes.get(seed.symbol);
-      if (q) return toMover({ ...seed, changePct: q.gapPct, price: q.last }, q);
-      return toMover(seed, null);
+      if (!q) return toMover(seed, null);
+      return toMover(seed, q, q.gapPct);
     });
     premarket = topGainers(gaps);
   }

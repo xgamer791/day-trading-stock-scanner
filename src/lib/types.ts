@@ -11,8 +11,10 @@ export type StockMover = {
   dayLow: number;
   prevClose: number;
   floatMillions?: number | null;
-  /** Distance from high of day as a fraction (0 = at HOD) */
+  /** % below day high (0 = at HOD) */
   hodDistancePct: number;
+  /** % gain at day high vs previous close — true HOD % */
+  hodGainPct?: number;
   /** True when price is at/near high of day */
   atHod: boolean;
   updatedAt: string;

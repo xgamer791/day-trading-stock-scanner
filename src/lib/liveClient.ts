@@ -164,8 +164,13 @@ async function fetchYahooQuote(symbol: string): Promise<{
   const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
   const last = Number(meta.regularMarketPrice) || 0;
   const sessionOpen = opens.length ? Number(opens[0]) : last;
-  const dayHigh = highs.length ? Math.max(...highs, last) : last;
-  const dayLow = lows.length ? Math.min(...lows, last) : last;
+  const metaHigh = Number(meta.regularMarketDayHigh) || 0;
+  const metaLow = Number(meta.regularMarketDayLow) || 0;
+  const dayHigh = Math.max(last, metaHigh, ...(highs.length ? highs : [0]));
+  const dayLow =
+    lows.length || metaLow
+      ? Math.min(last, metaLow || last, ...(lows.length ? lows : [last]))
+      : last;
   const volume = Number(meta.regularMarketVolume) || volumes.reduce((a, b) => a + b, 0) || 0;
   if (last <= 0 || prevClose <= 0) return null;
 
@@ -177,9 +182,11 @@ async function fetchYahooQuote(symbol: string): Promise<{
         ? ((prePrice - prevClose) / prevClose) * 100
         : null;
 
+  // Realtime Screener % = live last vs previous close
   const dayChangePct = ((last - prevClose) / prevClose) * 100;
   const gapPct = ((sessionOpen - prevClose) / prevClose) * 100;
   const hodDistancePct = dayHigh > 0 ? ((dayHigh - last) / dayHigh) * 100 : 0;
+  const hodGainPct = ((dayHigh - prevClose) / prevClose) * 100;
 
   return {
     symbol,
@@ -194,23 +201,43 @@ async function fetchYahooQuote(symbol: string): Promise<{
     prePct,
     prePrice,
     hodDistancePct,
+    hodGainPct,
   };
 }
 
-function seedToMover(seed: Seed, q: Awaited<ReturnType<typeof fetchYahooQuote>>): StockMover {
+function seedToMover(
+  seed: Seed,
+  q: Awaited<ReturnType<typeof fetchYahooQuote>>,
+  pctOverride: number | null = null,
+): StockMover {
   const price = q?.last && q.last > 0 ? q.last : seed.price;
   const prevClose =
-    q?.prevClose && q.prevClose > 0 ? q.prevClose : price / (1 + seed.changePct / 100 || 1);
+    q?.prevClose && q.prevClose > 0
+      ? q.prevClose
+      : seed.changePct
+        ? price / (1 + seed.changePct / 100)
+        : price;
   const dayHigh = q?.dayHigh && q.dayHigh > 0 ? Math.max(q.dayHigh, price) : price;
   const dayLow = q?.dayLow && q.dayLow > 0 ? q.dayLow : price;
   const volume = q?.volume && q.volume > 0 ? q.volume : seed.volume || 0;
+
+  let changePct: number;
+  if (pctOverride != null && Number.isFinite(pctOverride)) {
+    changePct = pctOverride;
+  } else if (q && prevClose > 0 && price > 0) {
+    changePct = ((price - prevClose) / prevClose) * 100;
+  } else {
+    changePct = seed.changePct;
+  }
+
   const hodDistancePct = dayHigh > 0 ? ((dayHigh - price) / dayHigh) * 100 : 0;
+  const hodGainPct = prevClose > 0 ? ((dayHigh - prevClose) / prevClose) * 100 : changePct;
 
   return {
     symbol: seed.symbol,
     name: q?.name || seed.name,
     price,
-    changePct: seed.changePct,
+    changePct,
     change: price - prevClose,
     volume,
     dayHigh,
@@ -218,6 +245,7 @@ function seedToMover(seed: Seed, q: Awaited<ReturnType<typeof fetchYahooQuote>>)
     prevClose,
     floatMillions: null,
     hodDistancePct,
+    hodGainPct,
     atHod: hodDistancePct <= 2,
     updatedAt: new Date().toISOString(),
   };
@@ -294,22 +322,26 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     premarket = topGainers(
       candidates.map((seed) => {
         const q = quoteMap.get(seed.symbol);
-        if (q && q.prePct != null) {
-          return seedToMover(
-            { ...seed, changePct: q.prePct, price: q.prePrice ?? q.last },
-            { ...q, last: q.prePrice ?? q.last },
-          );
-        }
-        return seedToMover(seed, q ?? null);
+        if (!q) return seedToMover(seed, null);
+        const price = q.prePrice ?? q.last;
+        const pct =
+          q.prePct != null
+            ? q.prePct
+            : q.prevClose > 0
+              ? ((price - q.prevClose) / q.prevClose) * 100
+              : seed.changePct;
+        return seedToMover(seed, { ...q, last: price }, pct);
       }),
     );
   } else if (session !== "closed") {
-    gainers = topGainers(candidates.map((seed) => seedToMover(seed, quoteMap.get(seed.symbol) ?? null)));
+    gainers = topGainers(
+      candidates.map((seed) => seedToMover(seed, quoteMap.get(seed.symbol) ?? null)),
+    );
     premarket = topGainers(
       candidates.map((seed) => {
         const q = quoteMap.get(seed.symbol);
-        if (q) return seedToMover({ ...seed, changePct: q.gapPct }, q);
-        return seedToMover(seed, null);
+        if (!q) return seedToMover(seed, null);
+        return seedToMover(seed, q, q.gapPct);
       }),
     );
   }

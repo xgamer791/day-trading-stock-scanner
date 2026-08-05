@@ -46,6 +46,7 @@ export function toMover(raw: {
   const atHod = hodDistancePct <= HOD_TOLERANCE_PCT;
   const change = raw.price - raw.prevClose;
   const changePct = (change / raw.prevClose) * 100;
+  const hodGainPct = (dayHigh - raw.prevClose) / raw.prevClose * 100;
 
   return {
     symbol: raw.symbol.toUpperCase(),
@@ -58,6 +59,7 @@ export function toMover(raw: {
     dayLow: raw.dayLow || raw.price,
     prevClose: raw.prevClose,
     hodDistancePct,
+    hodGainPct,
     atHod,
     updatedAt: raw.updatedAt ?? new Date().toISOString(),
   };
