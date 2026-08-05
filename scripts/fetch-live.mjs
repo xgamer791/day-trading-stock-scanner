@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 /**
- * Fetch live US equity gainers + news from Yahoo Finance (no API key).
- * Writes public/data/live.json for the static GitHub Pages app.
+ * Live US equity scanner for day-trade HOD / premarket runners.
+ *
+ * Primary universe: Nasdaq.com full stock screener (no $2B market-cap floor).
+ * Yahoo "day_gainers" is intentionally NOT used — it requires marketCap >= $2B
+ * and price >= $5, which hides the low-float runners day-trading apps show.
+ *
+ * Enrichment: Yahoo quote batch for day high / premarket / float when available.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -35,175 +40,253 @@ function sessionNow(d = new Date()) {
   return "closed";
 }
 
-async function yahooGet(url, attempt = 1) {
+async function getJson(url, headers = {}, attempt = 1) {
   const res = await fetch(url, {
     headers: {
       "User-Agent": UA,
       Accept: "application/json,text/plain,*/*",
       "Accept-Language": "en-US,en;q=0.9",
+      ...headers,
     },
   });
-  if (res.status === 429 && attempt < 4) {
-    await new Promise((r) => setTimeout(r, attempt * 1500));
-    return yahooGet(url, attempt + 1);
+  if ((res.status === 429 || res.status >= 500) && attempt < 4) {
+    await new Promise((r) => setTimeout(r, attempt * 1200));
+    return getJson(url, headers, attempt + 1);
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Yahoo ${res.status}: ${body.slice(0, 180)}`);
+    throw new Error(`HTTP ${res.status} ${url}: ${body.slice(0, 160)}`);
   }
   return res.json();
 }
 
-async function fetchScreener(scrId, count = 50) {
-  const url = `https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved?count=${count}&scrIds=${encodeURIComponent(scrId)}&formatted=false`;
-  const data = await yahooGet(url);
-  const result = data?.finance?.result?.[0];
-  if (!result?.quotes) {
-    const err = data?.finance?.error?.description || "no quotes";
-    throw new Error(`Screener ${scrId}: ${err}`);
+function parseMoney(v) {
+  if (v == null) return 0;
+  const n = Number(String(v).replace(/[$,%]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isCommonEquity(row) {
+  const sym = row.symbol || "";
+  const name = (row.name || "").toLowerCase();
+  if (!sym || /[.=]/.test(sym)) return false;
+  if (
+    name.includes("warrant") ||
+    name.includes(" unit") ||
+    name.includes("right") ||
+    name.includes("preferred")
+  ) {
+    return false;
   }
-  return result.quotes;
+  // Typical warrant/unit tickers: EOSEW, SHFSW, XXXWW
+  if (/(WW|WS|WT|W)$/.test(sym) && sym.length >= 5) return false;
+  if (sym.endsWith("U") && name.includes("unit")) return false;
+  return true;
+}
+
+async function fetchNasdaqUniverse() {
+  const url =
+    "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true";
+  const data = await getJson(url, {
+    Origin: "https://www.nasdaq.com",
+    Referer: "https://www.nasdaq.com/",
+  });
+  const rows = data?.data?.rows;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error("Nasdaq screener returned no rows");
+  }
+  return rows
+    .filter(isCommonEquity)
+    .map((r) => ({
+      symbol: r.symbol,
+      name: r.name,
+      price: parseMoney(r.lastsale),
+      changePct: parseMoney(r.pctchange),
+      change: parseMoney(r.netchange),
+      volume: parseMoney(r.volume),
+      marketCap: parseMoney(r.marketCap),
+    }))
+    .filter((r) => r.symbol && r.price > 0);
+}
+
+async function fetchYahooQuotes(symbols) {
+  if (!symbols.length) return new Map();
+  const map = new Map();
+  const targets = symbols.slice(0, 30);
+
+  const fetchOne = async (symbol) => {
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d`;
+    const data = await getJson(url);
+    const result = data?.chart?.result?.[0];
+    const meta = result?.meta;
+    if (!meta) return;
+    const highs = result?.indicators?.quote?.[0]?.high?.filter((n) => n != null) || [];
+    const lows = result?.indicators?.quote?.[0]?.low?.filter((n) => n != null) || [];
+    map.set(symbol, {
+      symbol,
+      regularMarketPrice: meta.regularMarketPrice,
+      regularMarketPreviousClose: meta.previousClose ?? meta.chartPreviousClose,
+      regularMarketDayHigh: highs.length ? Math.max(...highs) : meta.regularMarketPrice,
+      regularMarketDayLow: lows.length ? Math.min(...lows) : meta.regularMarketPrice,
+      regularMarketVolume: meta.regularMarketVolume,
+      preMarketPrice: meta.preMarketPrice,
+      preMarketChangePercent: meta.preMarketChangePercent,
+      postMarketPrice: meta.postMarketPrice,
+      postMarketChangePercent: meta.postMarketChangePercent,
+    });
+  };
+
+  // Limited concurrency to avoid rate limits
+  for (let i = 0; i < targets.length; i += 8) {
+    const chunk = targets.slice(i, i + 8);
+    await Promise.all(chunk.map((s) => fetchOne(s).catch(() => null)));
+  }
+  return map;
 }
 
 async function fetchNews(count = 40) {
-  const url = `https://query2.finance.yahoo.com/v1/finance/search?q=stocks&newsCount=${count}&quotesCount=0&listsCount=0`;
-  const data = await yahooGet(url);
-  return (data.news || []).map((n, i) => ({
-    id: n.uuid || `news-${i}`,
-    title: n.title,
-    publisher: n.publisher || "Yahoo Finance",
-    publishedAt: n.providerPublishTime
-      ? new Date(n.providerPublishTime * 1000).toISOString()
-      : new Date().toISOString(),
-    url: n.link || "https://finance.yahoo.com/news/",
-    tickers: (n.relatedTickers || []).slice(0, 6),
-    summary: n.summary,
-  }));
+  try {
+    const url = `https://query2.finance.yahoo.com/v1/finance/search?q=stocks&newsCount=${count}&quotesCount=0&listsCount=0`;
+    const data = await getJson(url);
+    return (data.news || []).map((n, i) => ({
+      id: n.uuid || `news-${i}`,
+      title: n.title,
+      publisher: n.publisher || "Yahoo Finance",
+      publishedAt: n.providerPublishTime
+        ? new Date(n.providerPublishTime * 1000).toISOString()
+        : new Date().toISOString(),
+      url: n.link || "https://finance.yahoo.com/news/",
+      tickers: (n.relatedTickers || []).slice(0, 6),
+      summary: n.summary,
+    }));
+  } catch (err) {
+    console.warn("News fetch failed:", err.message);
+    return [];
+  }
 }
 
-function toMover(q, mode) {
-  const symbol = q.symbol;
-  if (!symbol) return null;
+function enrichMover(base, yahoo, mode) {
+  const y = yahoo?.get(base.symbol);
+  let price = base.price;
+  let changePct = base.changePct;
+  let change = base.change;
+  let volume = base.volume;
+  let dayHigh = price;
+  let dayLow = price;
+  let prevClose = price / (1 + changePct / 100);
+  let floatMillions = null;
 
-  const prevClose = Number(q.regularMarketPreviousClose) || 0;
-  const dayHigh = Number(q.regularMarketDayHigh) || 0;
-  const dayLow = Number(q.regularMarketDayLow) || 0;
-  const volume = Number(q.regularMarketVolume) || 0;
+  if (y) {
+    prevClose = Number(y.regularMarketPreviousClose) || prevClose;
+    dayHigh = Number(y.regularMarketDayHigh) || dayHigh;
+    dayLow = Number(y.regularMarketDayLow) || dayLow;
+    volume = Number(y.regularMarketVolume) || volume;
+    if (y.floatShares) floatMillions = Number(y.floatShares) / 1e6;
 
-  let price;
-  let changePct;
-  let change;
-
-  if (mode === "premarket" && q.preMarketPrice != null) {
-    price = Number(q.preMarketPrice);
-    changePct = Number(q.preMarketChangePercent) || 0;
-    change = Number(q.preMarketChange) || price - prevClose;
-  } else if (mode === "afterhours" && q.postMarketPrice != null) {
-    price = Number(q.postMarketPrice);
-    changePct = Number(q.postMarketChangePercent) || 0;
-    change = Number(q.postMarketChange) || 0;
-  } else {
-    price = Number(q.regularMarketPrice) || 0;
-    changePct = Number(q.regularMarketChangePercent) || 0;
-    change = Number(q.regularMarketChange) || 0;
+    if (mode === "premarket" && y.preMarketPrice != null) {
+      price = Number(y.preMarketPrice);
+      changePct = Number(y.preMarketChangePercent) || changePct;
+      change = Number(y.preMarketChange) || price - prevClose;
+    } else if (mode === "afterhours" && y.postMarketPrice != null) {
+      price = Number(y.postMarketPrice);
+      changePct = Number(y.postMarketChangePercent) || changePct;
+    } else if (y.regularMarketPrice != null) {
+      price = Number(y.regularMarketPrice);
+      // Keep Nasdaq % as primary for ranking consistency with full-market movers;
+      // fall back to Yahoo % only if Nasdaq missing
+      if (!Number.isFinite(changePct) || changePct === 0) {
+        changePct =
+          ((price - prevClose) / prevClose) * 100 ||
+          Number(y.regularMarketChangePercent) ||
+          0;
+      }
+    }
+    dayHigh = Math.max(dayHigh, price);
   }
 
-  if (!Number.isFinite(price) || price <= 0) return null;
-  if (!Number.isFinite(prevClose) || prevClose <= 0) return null;
-
-  const high = Math.max(dayHigh || 0, price);
-  const hodDistancePct = high > 0 ? ((high - price) / high) * 100 : 0;
+  const hodDistancePct = dayHigh > 0 ? ((dayHigh - price) / dayHigh) * 100 : 0;
   const atHod = hodDistancePct <= HOD_TOLERANCE_PCT;
 
   return {
-    symbol,
-    name: q.displayName || q.shortName || q.longName,
+    symbol: base.symbol,
+    name: base.name || y?.shortName,
     price,
     changePct,
     change,
     volume,
-    dayHigh: high,
-    dayLow: dayLow || price,
+    dayHigh,
+    dayLow,
     prevClose,
+    floatMillions,
     hodDistancePct,
     atHod,
     updatedAt: new Date().toISOString(),
   };
 }
 
-function rankMovers(quotes, mode, opts = {}) {
-  const {
-    minChangePct = 1,
-    minPrice = 0.5,
-    maxPrice = 1000,
-    minVolume = 1000,
-    preferHod = false,
-    topN = 50,
-  } = opts;
-
-  const movers = quotes
-    .map((q) => toMover(q, mode))
-    .filter(Boolean)
+function rank(list, { minChangePct = 3, minPrice = 0.5, maxPrice = 100, minVolume = 1000, topN = 50 } = {}) {
+  return list
     .filter(
       (m) =>
         m.changePct >= minChangePct &&
         m.price >= minPrice &&
         m.price <= maxPrice &&
         m.volume >= minVolume,
-    );
-
-  movers.sort((a, b) => {
-    if (preferHod && a.atHod !== b.atHod) return a.atHod ? -1 : 1;
-    return b.changePct - a.changePct;
-  });
-
-  return movers.slice(0, topN);
+    )
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, topN);
 }
 
 async function main() {
   const session = sessionNow();
-  console.log(`Fetching Yahoo live data (session=${session})…`);
+  console.log(`Fetching full-market movers (session=${session})…`);
 
-  const [gainersQuotes, activesQuotes, news] = await Promise.all([
-    fetchScreener("day_gainers", 50),
-    fetchScreener("most_actives", 50).catch(() => []),
-    fetchNews(40).catch(() => []),
-  ]);
+  const [universe, news] = await Promise.all([fetchNasdaqUniverse(), fetchNews(40)]);
 
-  // Universe for both panels — real Yahoo movers
-  const universe = [...gainersQuotes, ...activesQuotes];
-  const seen = new Set();
-  const deduped = [];
-  for (const q of universe) {
-    if (!q?.symbol || seen.has(q.symbol)) continue;
-    seen.add(q.symbol);
-    deduped.push(q);
+  // Top candidates by Nasdaq % — includes micro/low-float names Yahoo hides
+  const candidates = [...universe]
+    .filter((r) => r.changePct >= 3 && r.price >= 0.5 && r.price <= 150)
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, 120);
+
+  if (candidates.length === 0) {
+    throw new Error("No live gainers found in Nasdaq universe");
   }
 
-  // Premarket panel: rank by premarket % when quotes have it; else regular % in the daytrade price band.
-  const hasPremarket = deduped.some((q) => q.preMarketPrice != null);
-  const premarket = rankMovers(deduped, hasPremarket ? "premarket" : "regular", {
-    minChangePct: hasPremarket ? 1 : 3,
-    maxPrice: 150,
-    preferHod: false,
+  const yahoo = await fetchYahooQuotes(candidates.map((c) => c.symbol));
+
+  const preMode = session === "premarket" ? "premarket" : "regular";
+  const enriched = candidates.map((c) => enrichMover(c, yahoo, preMode));
+
+  // Premarket panel: use premarket quotes when available, else Nasdaq %
+  const premarketEnriched = candidates.map((c) =>
+    enrichMover(c, yahoo, session === "premarket" ? "premarket" : "regular"),
+  );
+
+  const gainers = rank(enriched, {
+    minChangePct: 5,
+    minPrice: 0.5,
+    maxPrice: 100,
+    minVolume: 1000,
     topN: 50,
   });
 
-  // Market panel: always Yahoo "Day Gainers" using regular session stats (matches Yahoo / reference scanners)
-  const gainers = rankMovers(gainersQuotes, "regular", {
-    minChangePct: 1,
-    preferHod: false,
+  const premarket = rank(premarketEnriched, {
+    minChangePct: session === "premarket" ? 2 : 5,
+    minPrice: 0.5,
+    maxPrice: 50,
+    minVolume: 500,
     topN: 50,
   });
 
   if (gainers.length === 0) {
-    throw new Error("No live gainers returned from Yahoo");
+    throw new Error("No live gainers after filters");
   }
 
   const payload = {
     session,
     updatedAt: new Date().toISOString(),
-    source: "yahoo",
+    source: "nasdaq",
     news,
     premarket,
     gainers,
@@ -217,8 +300,11 @@ async function main() {
   console.log(
     "Top gainers:",
     gainers
-      .slice(0, 8)
-      .map((m) => `${m.symbol} ${m.changePct.toFixed(1)}%${m.atHod ? " HOD" : ""}`)
+      .slice(0, 10)
+      .map(
+        (m) =>
+          `${m.symbol} ${m.changePct.toFixed(1)}%${m.atHod ? " HOD" : ""}${m.floatMillions ? ` flt=${m.floatMillions.toFixed(1)}M` : ""}`,
+      )
       .join(", "),
   );
 }

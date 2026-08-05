@@ -81,7 +81,14 @@ export function ScannerBoard() {
       })
     : "—";
 
-  const sourceLabel = data?.source === "polygon" ? "POLYGON" : "YAHOO LIVE";
+  const sourceLabel =
+    data?.source === "polygon"
+      ? "POLYGON"
+      : data?.source?.startsWith("nasdaq")
+        ? "NASDAQ LIVE"
+        : data
+          ? "LIVE"
+          : "LOADING";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>

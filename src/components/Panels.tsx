@@ -1,6 +1,6 @@
 "use client";
 
-import { formatPct, formatPrice, formatVolume, timeAgo } from "@/lib/market";
+import { formatFloat, formatPct, formatPrice, formatVolume, timeAgo } from "@/lib/market";
 import type { NewsItem, StockMover } from "@/lib/types";
 
 export function SessionBadge({ session }: { session: string }) {
@@ -160,9 +160,9 @@ export function StockTable({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "64px 1fr 72px 64px 56px",
-          gap: 8,
-          padding: "8px 16px",
+          gridTemplateColumns: "56px 1fr 68px 56px 48px 44px",
+          gap: 6,
+          padding: "8px 12px",
           fontFamily: "var(--font-mono)",
           fontSize: 10,
           letterSpacing: "0.06em",
@@ -177,8 +177,9 @@ export function StockTable({
       >
         <span>Sym</span>
         <span>Last</span>
-        <span style={{ textAlign: "right" }}>Chg%</span>
+        <span style={{ textAlign: "right" }}>%Chg</span>
         <span style={{ textAlign: "right" }}>Vol</span>
+        <span style={{ textAlign: "right" }}>Flt</span>
         <span style={{ textAlign: "right" }}>HOD</span>
       </div>
       {rows.map((row, idx) => (
@@ -187,9 +188,9 @@ export function StockTable({
           className="panel-enter row-flash"
           style={{
             display: "grid",
-            gridTemplateColumns: "64px 1fr 72px 64px 56px",
-            gap: 8,
-            padding: "10px 16px",
+            gridTemplateColumns: "56px 1fr 68px 56px 48px 44px",
+            gap: 6,
+            padding: "10px 12px",
             borderBottom: "1px solid var(--border)",
             alignItems: "center",
             animationDelay: `${Math.min(idx, 15) * 25}ms`,
@@ -206,20 +207,6 @@ export function StockTable({
             >
               {row.symbol}
             </div>
-            {row.name && (
-              <div
-                style={{
-                  fontSize: 10,
-                  color: "var(--text-faint)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  maxWidth: 64,
-                }}
-              >
-                {row.name}
-              </div>
-            )}
           </div>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
             {formatPrice(row.price)}
@@ -244,7 +231,7 @@ export function StockTable({
             style={{
               textAlign: "right",
               fontFamily: "var(--font-mono)",
-              fontSize: 12,
+              fontSize: 11,
               color: "var(--text-dim)",
             }}
           >
@@ -255,11 +242,21 @@ export function StockTable({
               textAlign: "right",
               fontFamily: "var(--font-mono)",
               fontSize: 11,
+              color: "var(--text-dim)",
+            }}
+          >
+            {formatFloat(row.floatMillions)}
+          </div>
+          <div
+            style={{
+              textAlign: "right",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
               fontWeight: 700,
               color: "var(--hod)",
             }}
           >
-            {row.hodDistancePct <= 0.05 ? "PEAK" : `${row.hodDistancePct.toFixed(2)}%`}
+            {row.hodDistancePct <= 0.05 ? "PEAK" : `${row.hodDistancePct.toFixed(1)}%`}
           </div>
         </div>
       ))}

@@ -25,6 +25,8 @@ Deployed automatically to GitHub Pages on every push to `main`, and refreshed ev
 - Optional Polygon key (`POLYGON_API_KEY` / `NEXT_PUBLIC_POLYGON_API_KEY`) for exchange snapshots
 - GitHub Pages + Actions auto-deploy
 
+> **Why not Yahoo day_gainers?** Yahoo’s predefined gainer list requires **market cap ≥ $2B** and **price ≥ $5**, so it misses low-float runners (e.g. +200% names). We scan the full Nasdaq.com universe instead.
+
 ## Setup
 
 ```bash

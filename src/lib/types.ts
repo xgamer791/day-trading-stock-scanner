@@ -10,6 +10,7 @@ export type StockMover = {
   dayHigh: number;
   dayLow: number;
   prevClose: number;
+  floatMillions?: number | null;
   /** Distance from high of day as a fraction (0 = at HOD) */
   hodDistancePct: number;
   /** True when price is at/near high of day */
@@ -30,7 +31,7 @@ export type NewsItem = {
 export type ScannerPayload = {
   session: MarketSession;
   updatedAt: string;
-  source: "yahoo" | "polygon";
+  source: "nasdaq" | "nasdaq+yahoo" | "yahoo" | "polygon";
   news: NewsItem[];
   premarket: StockMover[];
   gainers: StockMover[];
