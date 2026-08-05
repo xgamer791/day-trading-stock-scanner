@@ -155,109 +155,60 @@ export function StockTable({
   rows: StockMover[];
   emptyText: string;
 }) {
-  const cols = "64px 1fr 88px 72px 64px";
   return (
-    <div style={{ overflow: "auto", flex: 1 }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: cols,
-          gap: 8,
-          padding: "10px 14px",
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-          fontWeight: 600,
-          letterSpacing: "0.04em",
-          textTransform: "uppercase",
-          color: "var(--text-dim)",
-          borderBottom: "1px solid var(--border)",
-          position: "sticky",
-          top: 0,
-          background: "var(--bg-panel)",
-          zIndex: 1,
-        }}
-      >
-        <span>Ticker</span>
-        <span style={{ textAlign: "right" }}>Price</span>
-        <span style={{ textAlign: "right" }}>%Chg</span>
-        <span style={{ textAlign: "right" }}>Vol</span>
-        <span style={{ textAlign: "right" }}>Flt</span>
-      </div>
-      {rows.map((row, idx) => (
-        <div
-          key={row.symbol}
-          className="panel-enter row-flash"
-          style={{
-            display: "grid",
-            gridTemplateColumns: cols,
-            gap: 8,
-            padding: "12px 14px",
-            borderBottom: "1px solid var(--border)",
-            alignItems: "center",
-            animationDelay: `${Math.min(idx, 15) * 25}ms`,
-          }}
-        >
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontWeight: 700,
-              fontSize: 15,
-              letterSpacing: "0.01em",
-              color: "var(--text)",
-            }}
-          >
-            {row.symbol}
-          </div>
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 15,
-              fontWeight: 600,
-              fontVariantNumeric: "tabular-nums",
-              textAlign: "right",
-              color: "var(--text)",
-            }}
-          >
-            {formatPrice(row.price)}
-          </div>
-          <div
-            style={{
-              textAlign: "right",
-              fontFamily: "var(--font-mono)",
-              fontWeight: 700,
-              fontSize: 15,
-              color: row.changePct >= 0 ? "var(--green)" : "var(--red)",
-              background: row.changePct >= 0 ? "var(--green-dim)" : "var(--red-dim)",
-              padding: "6px 8px",
-            }}
-            title="(last − prev close) / prev close — same as Realtime HOD %"
-          >
-            {formatPct(row.changePct)}
-          </div>
-          <div
-            style={{
-              textAlign: "right",
-              fontFamily: "var(--font-mono)",
-              fontSize: 14,
-              fontWeight: 500,
-              color: "var(--text)",
-            }}
-          >
-            {formatVolume(row.volume)}
-          </div>
-          <div
-            style={{
-              textAlign: "right",
-              fontFamily: "var(--font-mono)",
-              fontSize: 14,
-              fontWeight: 500,
-              color: "var(--text)",
-            }}
-          >
-            {formatFloat(row.floatMillions)}
-          </div>
+    <div className="stock-table" role="table" aria-label="Top gainers">
+      <div className="stock-table__grid stock-table__grid--head" role="row">
+        <div className="stock-table__cell stock-table__cell--head" role="columnheader">
+          Ticker
         </div>
-      ))}
+        <div className="stock-table__cell stock-table__cell--head stock-table__cell--num" role="columnheader">
+          Price
+        </div>
+        <div className="stock-table__cell stock-table__cell--head stock-table__cell--num" role="columnheader">
+          %Chg ↓
+        </div>
+        <div className="stock-table__cell stock-table__cell--head stock-table__cell--num" role="columnheader">
+          Vol
+        </div>
+        <div className="stock-table__cell stock-table__cell--head stock-table__cell--num" role="columnheader">
+          Flt
+        </div>
+      </div>
+
+      {rows.map((row, idx) => {
+        const up = row.changePct >= 0;
+        const delay = `${Math.min(idx, 15) * 25}ms`;
+        return (
+          <div
+            key={row.symbol}
+            className="stock-table__grid stock-table__row panel-enter row-flash"
+            style={{ animationDelay: delay }}
+            role="row"
+          >
+            <div className="stock-table__cell stock-table__cell--ticker" role="cell">
+              {row.symbol}
+            </div>
+            <div className="stock-table__cell stock-table__cell--num stock-table__cell--price" role="cell">
+              {formatPrice(row.price)}
+            </div>
+            <div
+              className={`stock-table__cell stock-table__cell--num stock-table__cell--chg ${
+                up ? "stock-table__cell--chg-up" : "stock-table__cell--chg-down"
+              }`}
+              role="cell"
+              title="(last − prev close) / prev close — same as Realtime HOD %"
+            >
+              {formatPct(row.changePct)}
+            </div>
+            <div className="stock-table__cell stock-table__cell--num stock-table__cell--vol" role="cell">
+              {formatVolume(row.volume)}
+            </div>
+            <div className="stock-table__cell stock-table__cell--num stock-table__cell--flt" role="cell">
+              {formatFloat(row.floatMillions)}
+            </div>
+          </div>
+        );
+      })}
       {rows.length === 0 && <EmptyState text={emptyText} />}
     </div>
   );

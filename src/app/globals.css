@@ -5,6 +5,8 @@
   --bg-row-hover: #1a212c;
   --border: #232a35;
   --border-strong: #2f3846;
+  /* Realtime Screener–style cell grid (light lines on dark / tinted cells) */
+  --grid-line: rgba(255, 255, 255, 0.28);
   --text: #f2f5f9;
   --text-dim: #c2cad6;
   --text-faint: #9aa5b5;
@@ -134,4 +136,86 @@ a {
 
 .panel-enter {
   animation: slide-in 0.35s ease-out both;
+}
+
+/* Full cell grid like Realtime Stock Screener */
+.stock-table {
+  overflow: auto;
+  flex: 1;
+  border-top: 1px solid var(--grid-line);
+}
+
+.stock-table__grid {
+  display: grid;
+  grid-template-columns: minmax(68px, 0.95fr) minmax(72px, 1fr) minmax(84px, 1.15fr) minmax(64px, 0.9fr) minmax(56px, 0.8fr);
+  gap: 0;
+  border-left: 1px solid var(--grid-line);
+  min-width: 360px;
+}
+
+.stock-table__grid--head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.stock-table__cell {
+  border-right: 1px solid var(--grid-line);
+  border-bottom: 1px solid var(--grid-line);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  background: var(--bg-panel);
+}
+
+.stock-table__cell--head {
+  background: #0a0c10;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  min-height: 34px;
+}
+
+.stock-table__cell--num {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.stock-table__cell--ticker {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.stock-table__cell--price,
+.stock-table__cell--vol,
+.stock-table__cell--flt {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.stock-table__cell--chg {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.stock-table__cell--chg-up {
+  color: var(--green);
+  background: rgba(22, 199, 132, 0.2);
+}
+
+.stock-table__cell--chg-down {
+  color: var(--red);
+  background: rgba(234, 57, 67, 0.2);
+}
+
+.stock-table__row:hover .stock-table__cell:not(.stock-table__cell--chg) {
+  background: var(--bg-row-hover);
 }
