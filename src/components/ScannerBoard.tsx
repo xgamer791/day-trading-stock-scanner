@@ -1,39 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
+import { NewsFeed, PanelHeader, StockTable } from "@/components/Panels";
+import { ScannerHeader, type ScannerTab } from "@/components/ScannerHeader";
 import { fetchLiveScannerClient } from "@/lib/liveClient";
+import { getMarketSession } from "@/lib/market";
 import type { MarketSession, ScannerPayload } from "@/lib/types";
-
-function localSession(): MarketSession {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    weekday: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-  const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
-  if (["Sat", "Sun"].includes(weekday)) return "closed";
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  const mins = hour * 60 + minute;
-  if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "premarket";
-  if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
-  if (mins >= 16 * 60 && mins < 20 * 60) return "afterhours";
-  return "closed";
-}
 
 export function ScannerBoard() {
   const [data, setData] = useState<ScannerPayload | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("mkt");
-  const [clockSession, setClockSession] = useState<MarketSession>(localSession);
+  const [mobileTab, setMobileTab] = useState<ScannerTab>("mkt");
+  const [clockSession, setClockSession] = useState<MarketSession>(() => getMarketSession());
   const inFlight = useRef(false);
 
   useEffect(() => {
-    const id = setInterval(() => setClockSession(localSession()), 1000);
+    const id = setInterval(() => setClockSession(getMarketSession()), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -51,7 +34,7 @@ export function ScannerBoard() {
         if (
           !live.gainers.length &&
           !live.premarket.length &&
-          localSession() === "regular"
+          getMarketSession() === "regular"
         ) {
           throw new Error("Live market data returned no top gainers");
         }
@@ -80,94 +63,21 @@ export function ScannerBoard() {
 
   const session = data?.session ?? clockSession;
 
-  const updatedLabel = data?.updatedAt
-    ? new Date(data.updatedAt).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-        timeZone: "America/New_York",
-      })
-    : "—";
-
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 16,
-          padding: "14px 20px",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--bg)",
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 14, minWidth: 0 }}>
-          <div>
-            <div
-              style={{
-                fontFamily: "var(--font-display)",
-                fontSize: 22,
-                fontWeight: 700,
-                letterSpacing: "-0.03em",
-                lineHeight: 1,
-              }}
-            >
-              Top Gainers
-            </div>
-            <div style={{ marginTop: 4, fontSize: 13, color: "var(--text-dim)" }}>
-              Live API only · Top 50 · Entire US market · 3s poll
-            </div>
-          </div>
-          <SessionBadge session={session} />
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 16,
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            color: "var(--text)",
-          }}
-        >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span
-              className={connected ? "live-dot" : undefined}
-              style={{
-                width: 8,
-                height: 8,
-                background: connected ? "var(--green)" : "var(--red)",
-                display: "inline-block",
-              }}
-            />
-            {connected ? "LIVE" : "RECONNECTING"}
-          </span>
-          <span>ET {updatedLabel}</span>
-          <span
-            style={{
-              border: "1px solid var(--border-strong)",
-              padding: "4px 8px",
-              color: "var(--hod)",
-            }}
-          >
-            NO CACHE
-          </span>
-        </div>
-      </div>
+      <ScannerHeader
+        activeTab={mobileTab}
+        onTabChange={setMobileTab}
+        connected={connected}
+      />
 
       {error && (
         <div
           style={{
-            padding: "14px 20px",
+            padding: "10px 16px",
             background: "var(--red-dim)",
             color: "var(--red)",
-            fontSize: 14,
+            fontSize: 13,
             fontWeight: 600,
             borderBottom: "1px solid var(--border)",
           }}
@@ -175,34 +85,6 @@ export function ScannerBoard() {
           Live data error: {error}
         </div>
       )}
-
-      <div className="mobile-tabs">
-        {(
-          [
-            ["news", "News"],
-            ["pre", "Premarket"],
-            ["mkt", "Gainers"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setMobileTab(id)}
-            style={{
-              background: mobileTab === id ? "var(--bg-row)" : "transparent",
-              color: mobileTab === id ? "var(--text)" : "var(--text-dim)",
-              border: "none",
-              borderRight: "1px solid var(--border)",
-              padding: "12px 8px",
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
 
       <main className="scanner-grid">
         <section
@@ -270,6 +152,6 @@ export function ScannerBoard() {
 const panelStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  minHeight: "calc(100vh - 70px)",
+  minHeight: "calc(100vh - 96px)",
   background: "var(--bg-panel)",
 };

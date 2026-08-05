@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { filterHodGainers, getMarketSession, toMover } from "../src/lib/market";
+import {
+  etWallTimeToUtc,
+  filterHodGainers,
+  getMarketCountdown,
+  getMarketSession,
+  nextRegularOpen,
+  toMover,
+} from "../src/lib/market";
 
 function testTopGainersRanksByPct() {
   const a = toMover({
@@ -46,7 +53,50 @@ function testSessionHelper() {
   assert.ok(["premarket", "regular", "afterhours", "closed"].includes(session));
 }
 
+function testCountdownDuringRegular() {
+  // Wednesday 2026-08-05 13:30:00 ET — regular session, 2h30m to close
+  const now = etWallTimeToUtc(2026, 8, 5, 13, 30, 0);
+  assert.equal(getMarketSession(now), "regular");
+  const cd = getMarketCountdown(now);
+  assert.equal(cd.kind, "closes");
+  assert.equal(cd.clock, "2:30:00");
+  assert.equal(cd.label, "CLOSES IN 2:30:00");
+}
+
+function testCountdownNearClose() {
+  const now = etWallTimeToUtc(2026, 8, 5, 15, 57, 28);
+  const cd = getMarketCountdown(now);
+  assert.equal(cd.kind, "closes");
+  assert.equal(cd.clock, "02:32");
+  assert.equal(cd.label, "CLOSES IN 02:32");
+}
+
+function testCountdownPremarketOpens() {
+  const now = etWallTimeToUtc(2026, 8, 5, 8, 0, 0);
+  assert.equal(getMarketSession(now), "premarket");
+  const cd = getMarketCountdown(now);
+  assert.equal(cd.kind, "opens");
+  assert.equal(cd.clock, "1:30:00");
+  assert.equal(cd.label, "OPENS IN 1:30:00");
+}
+
+function testCountdownWeekendToMonday() {
+  // Saturday Aug 8 2026 → next open Monday Aug 10 09:30 ET
+  const now = etWallTimeToUtc(2026, 8, 8, 12, 0, 0);
+  assert.equal(getMarketSession(now), "closed");
+  const open = nextRegularOpen(now);
+  const expected = etWallTimeToUtc(2026, 8, 10, 9, 30, 0);
+  assert.equal(open.getTime(), expected.getTime());
+  const cd = getMarketCountdown(now);
+  assert.equal(cd.kind, "opens");
+  assert.match(cd.label, /^OPENS IN /);
+}
+
 testTopGainersRanksByPct();
 testLoserRejected();
 testSessionHelper();
+testCountdownDuringRegular();
+testCountdownNearClose();
+testCountdownPremarketOpens();
+testCountdownWeekendToMonday();
 console.log("ok");

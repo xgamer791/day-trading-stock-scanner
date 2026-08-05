@@ -72,19 +72,167 @@ a {
   min-height: 0;
 }
 
-.mobile-tabs {
+/* Realtime Scanners–style collapsed header */
+.rts-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-shrink: 0;
+  color: #fff;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.rts-header__bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center 40%;
+  background-repeat: no-repeat;
+  z-index: 0;
+}
+
+.rts-header__wash {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  /* Realtime Scanners money-green grade */
+  background:
+    linear-gradient(
+      180deg,
+      rgba(12, 62, 36, 0.42) 0%,
+      rgba(8, 48, 28, 0.58) 45%,
+      rgba(5, 36, 20, 0.7) 100%
+    ),
+    rgba(6, 44, 24, 0.28);
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+
+.rts-header__wash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 70, 40, 0.22);
+  pointer-events: none;
+}
+
+.rts-header__top {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 6px 8px 0;
+}
+
+.rts-countdown {
+  justify-self: start;
+  margin-left: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.rts-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-right: 2px;
+}
+
+.rts-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rts-icon-btn:active {
+  opacity: 0.7;
+}
+
+.rts-header__tabs-row {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 14px 12px;
+  min-height: 42px;
+}
+
+.rts-speaker {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+.rts-tabs {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  min-width: 0;
+  flex: 1;
+  padding-right: 8px;
+}
+
+.rts-tabs::-webkit-scrollbar {
   display: none;
-  grid-template-columns: 1fr 1fr 1fr;
-  border-bottom: 1px solid var(--border);
+}
+
+.rts-tab {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.88);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  padding: 4px 0;
+  cursor: pointer;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.rts-tab--active {
+  color: #fff;
+  font-weight: 600;
 }
 
 @media (max-width: 960px) {
   .scanner-grid {
     grid-template-columns: 1fr;
-  }
-
-  .mobile-tabs {
-    display: grid;
   }
 
   .mobile-hide {

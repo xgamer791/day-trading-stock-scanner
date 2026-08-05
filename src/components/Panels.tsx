@@ -3,31 +3,6 @@
 import { formatFloat, formatPct, formatPrice, formatVolume, timeAgo } from "@/lib/market";
 import type { NewsItem, StockMover } from "@/lib/types";
 
-export function SessionBadge({ session }: { session: string }) {
-  const label: Record<string, string> = {
-    premarket: "PREMARKET",
-    regular: "MARKET OPEN",
-    afterhours: "AFTER HOURS",
-    closed: "MARKET CLOSED",
-  };
-  return (
-    <span
-      style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 12,
-        fontWeight: 700,
-        letterSpacing: "0.08em",
-        color: session === "closed" ? "var(--text-dim)" : "var(--hod)",
-        border: "1px solid var(--border-strong)",
-        padding: "4px 8px",
-        background: "var(--bg-row)",
-      }}
-    >
-      {label[session] ?? session.toUpperCase()}
-    </span>
-  );
-}
-
 export function PanelHeader({
   title,
   subtitle,

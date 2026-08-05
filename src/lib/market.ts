@@ -3,22 +3,144 @@ import type { MarketSession, StockMover } from "./types";
 /** Informational only — HOD is displayed, not used as a hard filter. */
 export const HOD_TOLERANCE_PCT = 2.0;
 
-export function getMarketSession(now = new Date()): MarketSession {
-  // US/Eastern approximations via Intl
+const ET = "America/New_York";
+
+type EtParts = {
+  weekday: string;
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+};
+
+function getEtParts(now: Date): EtParts {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
+    timeZone: ET,
     weekday: "short",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hourCycle: "h23",
   }).formatToParts(now);
 
-  const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
-  if (["Sat", "Sun"].includes(weekday)) return "closed";
+  const grab = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? "";
 
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  const mins = hour * 60 + minute;
+  return {
+    weekday: grab("weekday"),
+    year: Number(grab("year")),
+    month: Number(grab("month")),
+    day: Number(grab("day")),
+    hour: Number(grab("hour")),
+    minute: Number(grab("minute")),
+    second: Number(grab("second")),
+  };
+}
+
+/** Instant for a wall-clock time in America/New_York on an ET calendar date. */
+export function etWallTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second = 0,
+): Date {
+  const guess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const et = getEtParts(guess);
+  const asEtMs = Date.UTC(et.year, et.month - 1, et.day, et.hour, et.minute, et.second);
+  const wantMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  return new Date(guess.getTime() + (wantMs - asEtMs));
+}
+
+function addEtCalendarDays(
+  year: number,
+  month: number,
+  day: number,
+  delta: number,
+): { year: number; month: number; day: number; weekday: string } {
+  // Noon ET avoids DST edge ambiguity when stepping calendar days.
+  const noon = etWallTimeToUtc(year, month, day, 12, 0, 0);
+  const shifted = new Date(noon.getTime() + delta * 24 * 60 * 60 * 1000);
+  const p = getEtParts(shifted);
+  return { year: p.year, month: p.month, day: p.day, weekday: p.weekday };
+}
+
+function isWeekend(weekday: string): boolean {
+  return weekday === "Sat" || weekday === "Sun";
+}
+
+/** Next regular-session open (09:30 ET) on a weekday. */
+export function nextRegularOpen(now = new Date()): Date {
+  const p = getEtParts(now);
+  const openToday = etWallTimeToUtc(p.year, p.month, p.day, 9, 30, 0);
+  if (!isWeekend(p.weekday) && now.getTime() < openToday.getTime()) {
+    return openToday;
+  }
+
+  let cursor = { year: p.year, month: p.month, day: p.day, weekday: p.weekday };
+  for (let i = 0; i < 8; i++) {
+    cursor = addEtCalendarDays(cursor.year, cursor.month, cursor.day, 1);
+    if (!isWeekend(cursor.weekday)) {
+      return etWallTimeToUtc(cursor.year, cursor.month, cursor.day, 9, 30, 0);
+    }
+  }
+  return openToday;
+}
+
+/** Today's regular close (16:00 ET), or null if not a weekday session day. */
+export function todaysRegularClose(now = new Date()): Date | null {
+  const p = getEtParts(now);
+  if (isWeekend(p.weekday)) return null;
+  return etWallTimeToUtc(p.year, p.month, p.day, 16, 0, 0);
+}
+
+export type MarketCountdown = {
+  kind: "opens" | "closes";
+  /** Zero-padded Realtime-style clock: MM:SS or H:MM:SS */
+  clock: string;
+  label: string;
+  msRemaining: number;
+};
+
+function formatCountdownClock(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${pad(m)}:${pad(s)}`;
+}
+
+/**
+ * Realtime Scanners–style market open/close countdown (US equities, ET).
+ * Regular session: CLOSES IN until 16:00. Otherwise OPENS IN until next 09:30 weekday.
+ */
+export function getMarketCountdown(now = new Date()): MarketCountdown {
+  const session = getMarketSession(now);
+  if (session === "regular") {
+    const close = todaysRegularClose(now);
+    const ms = Math.max(0, (close?.getTime() ?? now.getTime()) - now.getTime());
+    const clock = formatCountdownClock(ms);
+    return { kind: "closes", clock, label: `CLOSES IN ${clock}`, msRemaining: ms };
+  }
+  const open = nextRegularOpen(now);
+  const ms = Math.max(0, open.getTime() - now.getTime());
+  const clock = formatCountdownClock(ms);
+  return { kind: "opens", clock, label: `OPENS IN ${clock}`, msRemaining: ms };
+}
+
+export function getMarketSession(now = new Date()): MarketSession {
+  const p = getEtParts(now);
+  if (isWeekend(p.weekday)) return "closed";
+
+  const mins = p.hour * 60 + p.minute;
 
   // Premarket 4:00–9:30, regular 9:30–16:00, afterhours 16:00–20:00 ET
   if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "premarket";
