@@ -10,6 +10,8 @@
  *  4) Yahoo spark for Most Advanced symbols missing from the ranked board (≤30)
  *  5) Live Flt for ranked spark/Polygon rows via small Nasdaq quote summary
  *  6) Rank by same-quote % — top 50
+ *  7) After Hours (16:00–20:00 ET only): rank by post-market % vs regular close
+ *     from live Yahoo screener payloads — NOT regular day_gainers %
  *
  * If BOTH Yahoo day_gainers and Polygon fail: throw / RECONNECTING.
  * Do NOT substitute Nasdaq Most Advanced alone as “top gainers”.
@@ -168,39 +170,50 @@ async function fetchMostAdvanced(): Promise<Seed[]> {
  * Price, prevClose, volume, and Flt share counts come from this payload —
  * no floats.json / in-memory float cache.
  */
-async function fetchYahooDayGainerQuotes(): Promise<Map<string, LiveQuote>> {
-  // allorigins/get often needs ~10–16s — do not use a short timeout (Safari Load failed).
-  // Retry: public proxies flake; one miss must not blank the whole Gainers board.
-  type DayGainersPayload = {
+async function fetchYahooScreenerRaw(
+  scrId: string,
+  count: number,
+  timeoutMs: number,
+  priority: "critical" | "normal" | "low",
+): Promise<Array<Record<string, unknown>>> {
+  type ScreenerPayload = {
     finance?: {
       result?: Array<{
         quotes?: Array<Record<string, unknown>>;
       }>;
     };
   };
+  const data = (await fetchViaProxy(
+    `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=${count}&scrIds=${encodeURIComponent(scrId)}&formatted=false`,
+    timeoutMs,
+    priority,
+  )) as ScreenerPayload;
+  return data?.finance?.result?.[0]?.quotes || [];
+}
+
+async function fetchYahooDayGainerQuotes(): Promise<{
+  map: Map<string, LiveQuote>;
+  raw: Array<Record<string, unknown>>;
+}> {
+  // allorigins/get often needs ~10–16s — do not use a short timeout (Safari Load failed).
+  // Retry: public proxies flake; one miss must not blank the whole Gainers board.
   let lastErr: Error | null = null;
-  let data: DayGainersPayload | null = null;
+  let quotes: Array<Record<string, unknown>> = [];
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      data = (await fetchViaProxy(
-        "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=100&scrIds=day_gainers&formatted=false",
-        18000,
-        "critical",
-      )) as DayGainersPayload;
-      const n = data?.finance?.result?.[0]?.quotes?.length || 0;
-      if (n > 0) break;
+      quotes = await fetchYahooScreenerRaw("day_gainers", 100, 18000, "critical");
+      if (quotes.length > 0) break;
       lastErr = new Error("day_gainers empty");
-      data = null;
+      quotes = [];
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
-      data = null;
+      quotes = [];
       if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
     }
   }
-  if (!data) throw lastErr || new Error("Live Yahoo day_gainers unavailable");
+  if (!quotes.length) throw lastErr || new Error("Live Yahoo day_gainers unavailable");
 
-  const quotes = data.finance?.result?.[0]?.quotes || [];
   const map = new Map<string, LiveQuote>();
   for (const q of quotes) {
     const symbol = String(q.symbol || "")
@@ -224,6 +237,81 @@ async function fetchYahooDayGainerQuotes(): Promise<Map<string, LiveQuote>> {
       liveFloatMillions(q),
     );
     if (row) map.set(symbol, row);
+  }
+  return { map, raw: quotes };
+}
+
+/**
+ * After-hours top gainers: % from regular-session close → postMarketPrice.
+ * NOT regular day_gainers ranking. Live Yahoo payloads only (STOCK_SCANNER_APP_MEMORY).
+ */
+function afterHoursQuoteFromRaw(q: Record<string, unknown>): LiveQuote | null {
+  const symbol = String(q.symbol || "")
+    .replace("/", "-")
+    .toUpperCase();
+  const name = String(q.shortName || q.longName || symbol);
+  if (!symbol || isJunk(symbol, name)) return null;
+
+  const post = Number(q.postMarketPrice) || 0;
+  const regular = Number(q.regularMarketPrice) || 0;
+  if (!(post > 0) || !(regular > 0)) return null;
+
+  // AH % vs regular close (same-payload math). Prefer recomputed over Yahoo's field.
+  const changePct = ((post - regular) / regular) * 100;
+  if (!(changePct > 0)) return null;
+
+  const dayHigh = Math.max(Number(q.regularMarketDayHigh) || 0, post);
+  const dayLow = Number(q.regularMarketDayLow) || Math.min(regular, post);
+  const volume = Number(q.postMarketVolume) || Number(q.regularMarketVolume) || 0;
+
+  return {
+    symbol,
+    name,
+    last: post,
+    prevClose: regular,
+    dayHigh,
+    dayLow,
+    volume,
+    changePct,
+    floatMillions: liveFloatMillions(q),
+  };
+}
+
+async function fetchAfterHoursGainerQuotes(
+  dayGainerRaw: Array<Record<string, unknown>>,
+): Promise<Map<string, LiveQuote>> {
+  // Broaden beyond day_gainers — AH winners are often flat/down on the day.
+  const extraIds = ["most_actives", "day_losers", "small_cap_gainers"] as const;
+  const extras = await Promise.allSettled(
+    extraIds.map((id) => fetchYahooScreenerRaw(id, 100, 16000, "normal")),
+  );
+
+  const rawMap = new Map<string, Record<string, unknown>>();
+  for (const q of dayGainerRaw) {
+    const s = String(q.symbol || "")
+      .replace("/", "-")
+      .toUpperCase();
+    if (s) rawMap.set(s, q);
+  }
+  for (const res of extras) {
+    if (res.status !== "fulfilled") continue;
+    for (const q of res.value) {
+      const s = String(q.symbol || "")
+        .replace("/", "-")
+        .toUpperCase();
+      if (!s) continue;
+      const prev = rawMap.get(s);
+      // Prefer the quote that carries a live postMarketPrice.
+      if (!prev || (Number(q.postMarketPrice) > 0 && !(Number(prev.postMarketPrice) > 0))) {
+        rawMap.set(s, q);
+      }
+    }
+  }
+
+  const map = new Map<string, LiveQuote>();
+  for (const q of rawMap.values()) {
+    const row = afterHoursQuoteFromRaw(q);
+    if (row) map.set(row.symbol, row);
   }
   return map;
 }
@@ -401,6 +489,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
 
   let advanced: Seed[] = [];
   let dayGainers = new Map<string, LiveQuote>();
+  let dayGainerRaw: Array<Record<string, unknown>> = [];
   let yahooErr: Error | null = null;
   let polygonErr: Error | null = null;
   let sourceLabel: ScannerPayload["source"] = "full-us-realtime";
@@ -414,8 +503,10 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     usePolygon ? fetchPolygonGainerQuotes(FEED_LIMIT) : Promise.resolve(null),
   ]);
 
-  if (yahooRes.status === "fulfilled") dayGainers = yahooRes.value;
-  else {
+  if (yahooRes.status === "fulfilled") {
+    dayGainers = yahooRes.value.map;
+    dayGainerRaw = yahooRes.value.raw;
+  } else {
     yahooErr =
       yahooRes.reason instanceof Error
         ? yahooRes.reason
@@ -493,6 +584,37 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     }
   }
 
+  // After Hours board — only during 16:00–20:00 ET. Ranked by post-market %
+  // vs regular close, not regular day_gainers %. Soft-fail (never kill Gainers).
+  let afterhoursMovers: StockMover[] = [];
+  if (session === "afterhours") {
+    try {
+      const ahMap = await fetchAfterHoursGainerQuotes(dayGainerRaw);
+      afterhoursMovers = [...ahMap.values()]
+        .map(toMover)
+        .filter((m) => {
+          const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
+          return Math.abs(recomputed - m.changePct) < 0.05;
+        })
+        .sort((a, b) => b.changePct - a.changePct)
+        .slice(0, FEED_LIMIT);
+
+      const ahNeed = afterhoursMovers
+        .filter((m) => m.floatMillions == null)
+        .map((m) => m.symbol);
+      if (ahNeed.length) {
+        try {
+          const marketCaps = await fetchLiveMarketCaps(ahNeed);
+          afterhoursMovers = applyLiveFloatFromMcap(afterhoursMovers, marketCaps);
+        } catch {
+          /* leave blank */
+        }
+      }
+    } catch {
+      afterhoursMovers = [];
+    }
+  }
+
   if (session !== "premarket" && session !== "closed" && movers.length < 3) {
     throw new Error(`Live quotes unavailable (${movers.length})`);
   }
@@ -507,8 +629,11 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     source: sourceLabel,
     feedLimit: FEED_LIMIT,
     news,
-    premarket: session === "closed" ? [] : movers,
+    // Premarket tab: live gaps/gainers during the premarket window only.
+    premarket: session === "premarket" ? movers : [],
+    // Gainers tab: regular-session day gainers (also visible into afterhours as the day's board).
     gainers: session === "premarket" || session === "closed" ? [] : movers,
+    afterhours: afterhoursMovers,
   };
 }
 

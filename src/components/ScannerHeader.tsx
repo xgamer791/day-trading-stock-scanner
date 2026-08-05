@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { getMarketCountdown } from "@/lib/market";
 
-export type ScannerTab = "news" | "pre" | "mkt";
+export type ScannerTab = "news" | "pre" | "mkt" | "ah";
 
 const TABS: { id: ScannerTab; label: string }[] = [
   { id: "news", label: "News" },
   { id: "pre", label: "Premarket" },
   { id: "mkt", label: "Gainers" },
+  { id: "ah", label: "After Hours" },
 ];
 
 function IconMenu() {

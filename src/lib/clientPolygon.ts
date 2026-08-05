@@ -76,5 +76,6 @@ export function buildFromPolygon(
     news,
     premarket: top,
     gainers: top,
+    afterhours: [],
   };
 }

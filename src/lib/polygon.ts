@@ -138,5 +138,6 @@ export async function fetchLiveScanner(): Promise<ScannerPayload> {
     news,
     premarket,
     gainers,
+    afterhours: [],
   };
 }

@@ -43,4 +43,6 @@ export type ScannerPayload = {
   news: NewsItem[];
   premarket: StockMover[];
   gainers: StockMover[];
+  /** After-hours (16:00–20:00 ET) top % gainers vs regular-session close — not day_gainers. */
+  afterhours: StockMover[];
 };

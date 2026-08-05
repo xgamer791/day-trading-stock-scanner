@@ -77,7 +77,8 @@ This is non-negotiable. Violating it is a failed change.
 - **Feeds:** top 50.
 - **Markets:** full US listed equities (NASDAQ, NYSE, AMEX/Arca, etc.).
 - **Junk filter OK:** warrants / units / rights / preferreds / leveraged ETFs (retail screener parity).
-- **Premarket tab ≠ Gainers tab** (session-aware).
+- **Premarket tab ≠ Gainers tab ≠ After Hours tab** (session-aware).
+- **After Hours tab:** only 16:00–20:00 ET; ranked by live post-market % vs regular-session close — never paste regular `day_gainers` into this tab.
 - **No demo / fake fallback data.**
 - Prefer GitHub Pages deploy; auto-deploy on changes and send the Pages link.
 

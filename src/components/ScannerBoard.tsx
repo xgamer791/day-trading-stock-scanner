@@ -41,6 +41,7 @@ export function ScannerBoard() {
         if (
           !live.gainers.length &&
           !live.premarket.length &&
+          !live.afterhours.length &&
           getMarketSession() === "regular"
         ) {
           throw new Error("Live market data returned no top gainers");
@@ -173,7 +174,6 @@ export function ScannerBoard() {
           style={{
             ...panelStyle,
             borderLeft: "1px solid var(--border)",
-            borderRight: "1px solid var(--border)",
           }}
         >
           <PanelHeader
@@ -189,7 +189,10 @@ export function ScannerBoard() {
 
         <section
           className={`panel ${mobileTab === "mkt" ? "mobile-show" : "mobile-hide"}`}
-          style={panelStyle}
+          style={{
+            ...panelStyle,
+            borderLeft: "1px solid var(--border)",
+          }}
         >
           <PanelHeader
             title="Market Top Gainers"
@@ -210,6 +213,29 @@ export function ScannerBoard() {
                   : session === "closed"
                     ? "Market closed"
                     : "Scanning live…"
+            }
+          />
+        </section>
+
+        <section
+          className={`panel ${mobileTab === "ah" ? "mobile-show" : "mobile-hide"}`}
+          style={panelStyle}
+        >
+          <PanelHeader
+            title="After Hours"
+            subtitle="Live post-market top % gainers vs regular close"
+            count={data?.afterhours.length ?? 0}
+          />
+          <StockTable
+            rows={data?.afterhours ?? []}
+            emptyText={
+              error
+                ? "Live data error"
+                : session === "afterhours"
+                  ? "Scanning after-hours…"
+                  : session === "closed"
+                    ? "After hours ended (4:00–8:00 PM ET)"
+                    : "After hours starts at 4:00 PM ET"
             }
           />
         </section>
