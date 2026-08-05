@@ -6,9 +6,9 @@ import { getMarketCountdown } from "@/lib/market";
 export type ScannerTab = "news" | "pre" | "mkt";
 
 const TABS: { id: ScannerTab; label: string }[] = [
+  { id: "news", label: "News" },
   { id: "pre", label: "Premarket" },
   { id: "mkt", label: "Gainers" },
-  { id: "news", label: "News" },
 ];
 
 function IconMenu() {
