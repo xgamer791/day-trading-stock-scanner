@@ -4,16 +4,19 @@
  * Every ~3s poll (no mover-row cache):
  *  1) Nasdaq Most Advanced (discovery)
  *  2) Yahoo day_gainers — price, prevClose, volume, impliedSharesOutstanding
- *  3) Yahoo spark ONLY for Most Advanced symbols missing from day_gainers (≤30)
- *  4) ONE live Nasdaq screener download → marketCap map for Flt (not for %)
- *  5) Rank by same-quote % — top 50; Flt = day_gainers shares OR marketCap/price
+ *  3) Yahoo spark for Most Advanced symbols missing from day_gainers (≤30)
+ *  4) Live Flt for those spark symbols via small Nasdaq quote summary
+ *     (marketCap/price). NOT the 2MB screener download — proxies cannot carry it.
+ *  5) Rank by same-quote % — top 50
  *
  * FORBIDDEN: live.json, floats.json, last-tick-as-LIVE, localStorage, etc.
- * Never use Nasdaq % with Yahoo last. Never N× per-symbol summary (proxy death).
+ * Never use Nasdaq % with Yahoo last.
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
+const FLOAT_SYMBOL_MAX = 20;
+const FLOAT_BATCH = 4;
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
@@ -311,32 +314,41 @@ function parseMarketCapDollars(v: unknown): number | null {
 }
 
 /**
- * ONE live Nasdaq download → symbol → marketCap (dollars).
- * Used only for Flt (= marketCap / livePrice). Never for displayed %.
- * Soft-fail: empty map on proxy errors — must not kill the quote poll.
+ * Live marketCap ($) for spark/Most-Advanced runners via small Nasdaq /summary
+ * JSON (NOT the 2MB download — CORS proxies cannot carry it). Soft-fail.
  */
-async function fetchNasdaqMarketCapsLive(): Promise<Map<string, number>> {
+async function fetchLiveMarketCaps(symbols: string[]): Promise<Map<string, number>> {
+  const need = [...new Set(symbols.map((s) => s.toUpperCase()).filter(Boolean))].slice(
+    0,
+    FLOAT_SYMBOL_MAX,
+  );
   const out = new Map<string, number>();
-  try {
-    const data = (await fetchViaProxy(
-      "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true",
-      12000,
-    )) as { data?: { rows?: Array<Record<string, string>> } };
-    for (const r of data?.data?.rows || []) {
-      const sym = String(r.symbol || "")
-        .replace("/", "-")
-        .toUpperCase();
-      if (!sym || isJunk(sym, r.name || "")) continue;
-      const mcap = parseMarketCapDollars(r.marketCap);
-      if (mcap != null) out.set(sym, mcap);
-    }
-  } catch {
-    /* Flt blank this poll — quotes still live */
+  if (!need.length) return out;
+
+  for (let i = 0; i < need.length; i += FLOAT_BATCH) {
+    const chunk = need.slice(i, i + FLOAT_BATCH);
+    await Promise.all(
+      chunk.map(async (symbol) => {
+        try {
+          const data = (await fetchViaProxy(
+            `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,
+            7000,
+          )) as {
+            data?: { summaryData?: { MarketCap?: { value?: string } } };
+          };
+          const mcap = parseMarketCapDollars(data?.data?.summaryData?.MarketCap?.value);
+          if (mcap != null) out.set(symbol, mcap);
+        } catch {
+          /* skip symbol */
+        }
+      }),
+    );
   }
   return out;
 }
 
-function applyLiveFloat(
+/** Flt millions = live marketCap / this poll's live price (Realtime implied-share parity). */
+function applyLiveFloatFromMcap(
   movers: StockMover[],
   marketCaps: Map<string, number>,
 ): StockMover[] {
@@ -377,15 +389,12 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
 
   let advanced: Seed[] = [];
   let quotes = new Map<string, LiveQuote>();
-  let marketCaps = new Map<string, number>();
   let yahooErr: Error | null = null;
   let advancedErr: Error | null = null;
 
-  // Quotes + bulk marketCap in parallel (Flt only from marketCap — never Nasdaq %).
-  const [advRes, yahooRes, mcapRes] = await Promise.allSettled([
+  const [advRes, yahooRes] = await Promise.allSettled([
     fetchMostAdvanced(),
     fetchYahooDayGainerQuotes(),
-    fetchNasdaqMarketCapsLive(),
   ]);
 
   if (advRes.status === "fulfilled") advanced = advRes.value;
@@ -394,16 +403,29 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   if (yahooRes.status === "fulfilled") quotes = yahooRes.value;
   else yahooErr = yahooRes.reason instanceof Error ? yahooRes.reason : new Error(String(yahooRes.reason));
 
-  if (mcapRes.status === "fulfilled") marketCaps = mcapRes.value;
-
   const missing = advanced.map((s) => s.symbol).filter((s) => !quotes.has(s));
+  let marketCaps = new Map<string, number>();
+
   if (missing.length) {
-    const spark = await fetchYahooSpark(missing);
-    for (const [sym, q] of spark) quotes.set(sym, q);
+    // Price (spark) + marketCap (small summaries) in parallel — same runner set.
+    const [sparkRes, mcapRes] = await Promise.allSettled([
+      fetchYahooSpark(missing),
+      fetchLiveMarketCaps(missing),
+    ]);
+    if (sparkRes.status === "fulfilled") {
+      for (const [sym, q] of sparkRes.value) quotes.set(sym, q);
+    }
+    if (mcapRes.status === "fulfilled") marketCaps = mcapRes.value;
   }
 
   if (!quotes.size && advanced.length) {
-    quotes = await fetchYahooSpark(advanced.map((s) => s.symbol));
+    const syms = advanced.map((s) => s.symbol);
+    const [sparkRes, mcapRes] = await Promise.allSettled([
+      fetchYahooSpark(syms),
+      fetchLiveMarketCaps(syms),
+    ]);
+    if (sparkRes.status === "fulfilled") quotes = sparkRes.value;
+    if (mcapRes.status === "fulfilled") marketCaps = mcapRes.value;
   }
 
   for (const s of advanced) {
@@ -415,7 +437,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     throw yahooErr || advancedErr || new Error("Live Yahoo spark failed");
   }
 
-  const movers = applyLiveFloat(
+  let movers = applyLiveFloatFromMcap(
     [...quotes.values()]
       .map(toMover)
       .filter((m) => {
@@ -426,6 +448,18 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
       .slice(0, FEED_LIMIT),
     marketCaps,
   );
+
+  // Fill any remaining Flt gaps on the ranked board (live summaries, soft-fail).
+  const stillNeed = movers.filter((m) => m.floatMillions == null).map((m) => m.symbol);
+  if (stillNeed.length) {
+    try {
+      const extra = await fetchLiveMarketCaps(stillNeed);
+      for (const [k, v] of extra) marketCaps.set(k, v);
+      movers = applyLiveFloatFromMcap(movers, marketCaps);
+    } catch {
+      /* leave blank */
+    }
+  }
 
   if (session !== "premarket" && session !== "closed" && movers.length < 3) {
     throw new Error(`Live quotes unavailable (${movers.length})`);
