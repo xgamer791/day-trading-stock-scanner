@@ -160,7 +160,7 @@ export function StockTable({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "56px 1fr 72px 56px 48px 44px",
+          gridTemplateColumns: "56px 1fr 72px 64px 56px",
           gap: 6,
           padding: "8px 12px",
           fontFamily: "var(--font-mono)",
@@ -180,9 +180,6 @@ export function StockTable({
         <span style={{ textAlign: "right" }}>%Chg</span>
         <span style={{ textAlign: "right" }}>Vol</span>
         <span style={{ textAlign: "right" }}>Flt</span>
-        <span style={{ textAlign: "right" }} title="% below day high">
-          OFF
-        </span>
       </div>
       {rows.map((row, idx) => (
         <div
@@ -190,7 +187,7 @@ export function StockTable({
           className="panel-enter row-flash"
           style={{
             display: "grid",
-            gridTemplateColumns: "56px 1fr 72px 56px 48px 44px",
+            gridTemplateColumns: "56px 1fr 72px 64px 56px",
             gap: 6,
             padding: "10px 12px",
             borderBottom: "1px solid var(--border)",
@@ -249,18 +246,6 @@ export function StockTable({
             }}
           >
             {formatFloat(row.floatMillions)}
-          </div>
-          <div
-            style={{
-              textAlign: "right",
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              fontWeight: 700,
-              color: "var(--hod)",
-            }}
-            title="% below day high"
-          >
-            {row.hodDistancePct <= 0.05 ? "PEAK" : `${row.hodDistancePct.toFixed(1)}%`}
           </div>
         </div>
       ))}
