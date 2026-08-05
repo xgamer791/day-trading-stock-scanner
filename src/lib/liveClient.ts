@@ -455,6 +455,8 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     throw new Error(`Live quotes unavailable (${movers.length})`);
   }
 
+  // News is polled separately in ScannerBoard (live, soft-fail) so the 3s
+  // gainers path does not burn proxies on multi-query news fetches.
   const news: NewsItem[] = [];
 
   return {

@@ -3,17 +3,21 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, StockTable } from "@/components/Panels";
 import { ScannerHeader, type ScannerTab } from "@/components/ScannerHeader";
+import { fetchLiveNewsFeed } from "@/lib/fetchLiveNewsFeed";
 import { fetchLiveScannerClient } from "@/lib/liveClient";
 import { getMarketSession } from "@/lib/market";
-import type { MarketSession, ScannerPayload } from "@/lib/types";
+import type { MarketSession, NewsItem, ScannerPayload } from "@/lib/types";
 
 export function ScannerBoard() {
   const [data, setData] = useState<ScannerPayload | null>(null);
+  const [news, setNews] = useState<NewsItem[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newsError, setNewsError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<ScannerTab>("mkt");
   const [clockSession, setClockSession] = useState<MarketSession>(() => getMarketSession());
   const inFlight = useRef(false);
+  const newsInFlight = useRef(false);
 
   useEffect(() => {
     const id = setInterval(() => setClockSession(getMarketSession()), 1000);
@@ -61,6 +65,36 @@ export function ScannerBoard() {
     };
   }, []);
 
+  // Live news poll — separate from gainers so multi-query news doesn’t burn quote proxies.
+  // Each tick fetches fresh headlines (no TTL cache / no filler). Soft-fail only.
+  useEffect(() => {
+    let cancelled = false;
+
+    const tickNews = async () => {
+      if (newsInFlight.current) return;
+      newsInFlight.current = true;
+      try {
+        const items = await fetchLiveNewsFeed();
+        if (cancelled) return;
+        setNews(items);
+        setNewsError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setNews([]);
+        setNewsError(err instanceof Error ? err.message : "Live news unavailable");
+      } finally {
+        newsInFlight.current = false;
+      }
+    };
+
+    tickNews();
+    const id = setInterval(tickNews, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   const session = data?.session ?? clockSession;
 
   return (
@@ -89,14 +123,21 @@ export function ScannerBoard() {
       <main className="scanner-grid">
         <section
           className={`panel ${mobileTab === "news" ? "mobile-show" : "mobile-hide"}`}
-          style={panelStyle}
+          style={{ ...panelStyle, background: "#000" }}
         >
-          <PanelHeader
-            title="Breaking News"
-            subtitle="Most recent market headlines tied to active tickers"
-            count={data?.news.length ?? 0}
-          />
-          <NewsFeed items={data?.news ?? []} />
+          <NewsFeed items={news} />
+          {newsError && news.length === 0 && (
+            <div
+              style={{
+                padding: "10px 16px",
+                color: "var(--red)",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              Live news error: {newsError}
+            </div>
+          )}
         </section>
 
         <section

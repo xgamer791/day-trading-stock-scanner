@@ -56,71 +56,72 @@ export function PanelHeader({
 
 export function NewsFeed({ items }: { items: NewsItem[] }) {
   return (
-    <div style={{ overflow: "auto", flex: 1 }}>
-      {items.map((item, idx) => (
-        <a
-          key={item.id}
-          href={item.url}
-          target="_blank"
-          rel="noreferrer"
-          className="panel-enter"
-          style={{
-            display: "block",
-            padding: "12px 16px",
-            borderBottom: "1px solid var(--border)",
-            textDecoration: "none",
-            animationDelay: `${Math.min(idx, 12) * 30}ms`,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--bg-row-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 8,
-              marginBottom: 6,
-              fontFamily: "var(--font-mono)",
-              fontSize: 10,
-              color: "var(--text-faint)",
-              letterSpacing: "0.04em",
-              textTransform: "uppercase",
-            }}
-          >
-            <span>{item.publisher}</span>
-            <span>{timeAgo(item.publishedAt)}</span>
-          </div>
-          <div style={{ fontSize: 14, fontWeight: 500, lineHeight: 1.35, marginBottom: 8 }}>
-            {item.title}
-          </div>
-          {item.tickers.length > 0 && (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {item.tickers.slice(0, 4).map((t) => (
-                <span
-                  key={t}
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: "var(--accent)",
-                    border: "1px solid var(--border-strong)",
-                    padding: "2px 6px",
-                  }}
-                >
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
-        </a>
-      ))}
-      {items.length === 0 && <EmptyState text="Waiting for breaking news…" />}
+    <div className="news6" role="feed" aria-label="Live market news">
+      <div className="news6__titlebar">
+        <span className="news6__title">NEWS SCANNER</span>
+        <span className="news6__count">{items.length}</span>
+      </div>
+      <div className="news6__list">
+        {items.map((item, idx) => {
+          const sym = (item.tickers[0] || "—").toUpperCase();
+          const up = (item.changePct ?? 0) >= 0;
+          const hasQuote = item.price != null && Number.isFinite(item.price);
+          return (
+            <a
+              key={item.id}
+              href={item.url}
+              target="_blank"
+              rel="noreferrer"
+              className="news6__row"
+              style={{ animationDelay: `${Math.min(idx, 12) * 20}ms` }}
+            >
+              <span
+                className="news6__ticker"
+                style={{ background: tickerColor(sym) }}
+                aria-hidden={sym === "—"}
+              >
+                {sym.slice(0, 5)}
+              </span>
+              <span className="news6__headline">{item.title}</span>
+              <span className="news6__quote">
+                {hasQuote ? (
+                  <>
+                    <span className="news6__price">{formatPrice(item.price!)}</span>
+                    <span className={up ? "news6__chg news6__chg--up" : "news6__chg news6__chg--down"}>
+                      {formatPct(item.changePct!)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="news6__price news6__price--empty">—</span>
+                )}
+              </span>
+              <span className="news6__ago">{timeAgo(item.publishedAt)}</span>
+            </a>
+          );
+        })}
+        {items.length === 0 && <EmptyState text="Waiting for live news…" />}
+      </div>
     </div>
   );
+}
+
+/** Stable mock-6 palette from ticker symbol (not % based). */
+function tickerColor(sym: string): string {
+  const palette = [
+    "#16a34a", // green
+    "#7c3aed", // purple
+    "#dc2626", // red
+    "#1d4ed8", // blue
+    "#ea580c", // orange
+    "#ca8a04", // yellow/gold
+    "#0d9488", // teal
+    "#9333ea", // violet
+    "#2563eb", // bright blue
+    "#b45309", // amber
+  ];
+  let h = 0;
+  for (let i = 0; i < sym.length; i++) h = (h * 31 + sym.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
 }
 
 export function StockTable({
