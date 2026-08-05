@@ -8,6 +8,17 @@ Owner intent: Realtime Stock Screener–style **top % gainers** across the **ent
 
 ---
 
+## SECOND AGENT / VISUAL QA — HARD MUST
+
+When the user asks for a “second agent”, “another agent”, or a visual check that work is identical / correct:
+
+1. **Use another Grok agent only** (same provider — Cursor Grok / Task subagent with a Grok model).
+2. **Do NOT** hand visual QA to a different model provider (Claude, GPT, Gemini, etc.) just because a “second agent” was requested.
+3. “Another agent” means a **separate Grok reviewer pass** (fresh Task/subagent), not a different company/model family.
+4. Computer-use / screenshot capture for evidence is fine; the **verdict** agent must still be Grok when the user asked for a second-agent check.
+
+---
+
 ## VERIFY YOUR WORK — HARD MUST
 
 Do **not** tell the user a fix is done until you have verified it. Claiming “deployed” without checking the live board is a failed change.
@@ -69,9 +80,15 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 - Actions or Yahoo feed was correct, then a browser “upgrade” overwrote rows with Nasdaq Most Advanced % while keeping another last price (or inventing prevClose from Nasdaq % so `rowSynced` passed).
 - **Never overlay** a secondary Nasdaq-% feed on top of an accurate last/prevClose feed.
 
+Related failure (~20s “list randomly switches to a completely different board”):
+
+- Yahoo `day_gainers` died after CORS proxy burn, then the client painted **Nasdaq Most Advanced + spark alone** as top gainers.
+- **Never** use Most Advanced / spark-only as the ranked gainers board when `day_gainers` fails — throw RECONNECTING and clear rows instead.
+- Keep Flt summary proxy traffic small so it does not knock out `day_gainers`.
+
 **Required live path (client):**
-1. Discover via live **Nasdaq Most Advanced** each poll (runners). Primary quotes from **Yahoo day_gainers** — `regularMarketPrice`, `regularMarketPreviousClose`, `regularMarketVolume`, and Flt share counts (`impliedSharesOutstanding` → `sharesOutstanding`) on the **same live payload**. Spark only fills Most Advanced symbols missing from day_gainers (≤30).
-2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**
+1. Discover via live **Nasdaq Most Advanced** each poll (runners / discovery only). Primary quotes from **Yahoo day_gainers** — `regularMarketPrice`, `regularMarketPreviousClose`, `regularMarketVolume`, and Flt share counts (`impliedSharesOutstanding` → `sharesOutstanding`) on the **same live payload**. Spark only fills Most Advanced symbols missing from day_gainers (≤30).
+2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**. If `day_gainers` is empty/failed → error, do **not** substitute Most Advanced.
 3. **Flt** each poll (live only):
    - Prefer Yahoo day_gainers `impliedSharesOutstanding` when the row came from that payload.
    - For Most Advanced / spark runners (usually **absent** from day_gainers): live-fetch small Nasdaq `quote/.../summary` **marketCap** (batched) and compute `marketCap / livePrice / 1e6`.
@@ -98,5 +115,7 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 - [ ] %Chg recomputes from same quote’s last + prevClose
 - [ ] Price, volume, %Chg, and Flt come from the live poll — not cross-poll caches
 - [ ] Failed live poll does not paint snapshot/cached movers as LIVE (rows cleared)
+- [ ] Failed `day_gainers` does not paint Most Advanced / spark-only as the gainers board
 - [ ] **VERIFY YOUR WORK:** live Pages Gainers table shows numeric Flt for most top runners; LIVE not stuck RECONNECTING
 - [ ] Deployed Pages link verified after change
+- [ ] If user asked for a second-agent visual check: use **another Grok agent**, not another provider
