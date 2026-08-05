@@ -55,8 +55,8 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 **Required live path (client):**
 1. Discover via live **Nasdaq Most Advanced** each poll (runners). Primary quotes from **Yahoo day_gainers** — `regularMarketPrice`, `regularMarketPreviousClose`, `regularMarketVolume`, and Flt share counts (`impliedSharesOutstanding` → `sharesOutstanding`) on the **same live payload**. Spark only fills Most Advanced symbols missing from day_gainers (≤30). Do **not** multi-batch spark 100+ symbols or hit the 10k full screener on the hot path.
 2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**
-3. **Flt** from the live day_gainers quote each poll when present (`impliedSharesOutstanding`). Most Advanced runners are often **absent** from day_gainers — for those, live-fetch Nasdaq quote summary **marketCap** that poll and compute `marketCap / price / 1e6` (Realtime implied-share parity). Never `floats.json` / cross-poll float cache.
-4. Poll ~every **3s**; on failure show RECONNECTING and clear rows. Never fall back to `live.json` / `floats.json`.
+3. **Flt** from the live day_gainers quote each poll when present (`impliedSharesOutstanding`). Most Advanced runners are often **absent** from day_gainers — for those, best-effort live Nasdaq summary `marketCap / price / 1e6` **that poll only** (Realtime implied-share parity). Cap Flt fill requests (≤8) with a short deadline so Flt never burns CORS proxies or fails the quote poll (“Load failed” / reconnect loops). Never `floats.json` / cross-poll float cache.
+4. Poll ~every **3s**; on quote-poll failure show RECONNECTING and clear rows. Never fall back to `live.json` / `floats.json`. Flt miss → blank Flt cell, not a failed feed.
 
 ---
 

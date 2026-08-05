@@ -14,26 +14,40 @@
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
+/** Max Nasdaq summary calls for Flt per poll — more than this burns CORS proxies (~15s reconnect loops). */
+const FLOAT_FILL_MAX = 8;
+const FLOAT_FILL_BUDGET_MS = 2500;
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}_=${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const PROXY_BUILDERS: Array<(enc: string) => string> = [
+  (enc) => `https://corsproxy.io/?${enc}`,
+  (enc) => `https://api.allorigins.win/raw?url=${enc}`,
+  (enc) => `https://api.codetabs.com/v1/proxy?quest=${enc}`,
+];
+
+/** Sticky transport preference only — not quote/float data (APP_MEMORY allowed). */
+let preferredProxy = 0;
+
 function proxyUrls(url: string): string[] {
   const live = bust(url);
   const enc = encodeURIComponent(live);
-  return [
-    `https://corsproxy.io/?${enc}`,
-    `https://api.allorigins.win/raw?url=${enc}`,
-    `https://api.codetabs.com/v1/proxy?quest=${enc}`,
+  const builders = [
+    ...PROXY_BUILDERS.slice(preferredProxy),
+    ...PROXY_BUILDERS.slice(0, preferredProxy),
   ];
+  return builders.map((b) => b(enc));
 }
 
 /** Sequential proxies — racing all three every 3s burns quota and dies ~20s in. */
 async function fetchTextViaProxy(url: string, timeoutMs = 7000): Promise<string> {
   let lastErr: Error | null = null;
-  for (const p of proxyUrls(url)) {
+  const urls = proxyUrls(url);
+  for (let i = 0; i < urls.length; i++) {
+    const p = urls[i];
     try {
       const res = await fetch(p, {
         cache: "no-store",
@@ -49,6 +63,8 @@ async function fetchTextViaProxy(url: string, timeoutMs = 7000): Promise<string>
         lastErr = new Error("proxy HTML");
         continue;
       }
+      // Remember which builder worked (offset into PROXY_BUILDERS).
+      preferredProxy = (preferredProxy + i) % PROXY_BUILDERS.length;
       return text;
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
@@ -59,6 +75,20 @@ async function fetchTextViaProxy(url: string, timeoutMs = 7000): Promise<string>
 
 async function fetchViaProxy(url: string, timeoutMs = 7000): Promise<unknown> {
   return JSON.parse(await fetchTextViaProxy(url, timeoutMs));
+}
+
+async function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function parseMoney(v: unknown): number {
@@ -300,41 +330,37 @@ function parseMarketCapDollars(v: unknown): number | null {
 /**
  * Live Flt for Most Advanced / spark rows (not in Yahoo day_gainers).
  * Realtime parity: marketCap / live price ≈ impliedSharesOutstanding.
- * This poll only — no floats.json / cross-poll cache. Yahoo crumb quoteSummary
- * fails through CORS proxies, so Nasdaq summary is the live transport.
+ * Best-effort only — must NEVER throw or burn proxies (25 summaries/poll caused
+ * "Load failed" reconnect loops ~every 15s). Cap + deadline; no floats.json.
  */
 async function fetchLiveFloatThisPoll(
   rows: Array<{ symbol: string; price: number }>,
 ): Promise<Map<string, number>> {
   const need = rows
     .filter((r) => r.symbol && r.price > 0)
-    .slice(0, 25)
+    .slice(0, FLOAT_FILL_MAX)
     .map((r) => ({ symbol: r.symbol.toUpperCase(), price: r.price }));
   const out = new Map<string, number>();
   if (!need.length) return out;
 
-  // Concurrent batches — keep CORS proxies alive at 3s poll.
-  const BATCH = 8;
-  for (let i = 0; i < need.length; i += BATCH) {
-    const chunk = need.slice(i, i + BATCH);
-    await Promise.all(
-      chunk.map(async ({ symbol, price }) => {
-        try {
-          const data = (await fetchViaProxy(
-            `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,
-            6000,
-          )) as {
-            data?: { summaryData?: { MarketCap?: { value?: string } } };
-          };
-          const mcap = parseMarketCapDollars(data?.data?.summaryData?.MarketCap?.value);
-          if (mcap == null || !(price > 0)) return;
-          const millions = mcap / price / 1_000_000;
-          if (Number.isFinite(millions) && millions > 0) out.set(symbol, millions);
-        } catch {
-          /* leave empty this poll */
-        }
-      }),
-    );
+  const started = Date.now();
+  // Sequential on sticky proxy — parallel summary storms kill CORS quota.
+  for (const { symbol, price } of need) {
+    if (Date.now() - started > FLOAT_FILL_BUDGET_MS) break;
+    try {
+      const data = (await fetchViaProxy(
+        `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,
+        3500,
+      )) as {
+        data?: { summaryData?: { MarketCap?: { value?: string } } };
+      };
+      const mcap = parseMarketCapDollars(data?.data?.summaryData?.MarketCap?.value);
+      if (mcap == null || !(price > 0)) continue;
+      const millions = mcap / price / 1_000_000;
+      if (Number.isFinite(millions) && millions > 0) out.set(symbol, millions);
+    } catch {
+      /* leave empty — do not fail the quote poll */
+    }
   }
   return out;
 }
@@ -407,18 +433,26 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, FEED_LIMIT);
 
-  // Live Flt for spark-only rows (Most Advanced runners absent from day_gainers).
+  // Best-effort live Flt for spark-only rows — never fail price/%/vol for Flt.
   const needFlt = movers
     .filter((m) => m.floatMillions == null)
     .map((m) => ({ symbol: m.symbol, price: m.price }));
   if (needFlt.length) {
-    const liveFlt = await fetchLiveFloatThisPoll(needFlt);
-    if (liveFlt.size) {
-      movers = movers.map((m) =>
-        m.floatMillions != null
-          ? m
-          : { ...m, floatMillions: liveFlt.get(m.symbol.toUpperCase()) ?? null },
+    try {
+      const liveFlt = await withDeadline(
+        fetchLiveFloatThisPoll(needFlt),
+        FLOAT_FILL_BUDGET_MS,
+        new Map<string, number>(),
       );
+      if (liveFlt.size) {
+        movers = movers.map((m) =>
+          m.floatMillions != null
+            ? m
+            : { ...m, floatMillions: liveFlt.get(m.symbol.toUpperCase()) ?? null },
+        );
+      }
+    } catch {
+      /* quotes already live — leave Flt blank this poll */
     }
   }
 
