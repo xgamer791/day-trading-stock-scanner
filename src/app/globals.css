@@ -72,44 +72,18 @@ a {
   min-height: 0;
 }
 
-/* Realtime Scanners–style collapsed header */
+/* Realtime Scanners–style collapsed header (layout only; app design tokens) */
 .rts-header {
   position: sticky;
   top: 0;
   z-index: 20;
   flex-shrink: 0;
-  color: #fff;
-  isolation: isolate;
-  overflow: hidden;
-}
-
-.rts-header__bg {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  background-position: center center;
-  background-repeat: no-repeat;
-  z-index: 0;
-  filter: saturate(1.15) brightness(0.85);
-}
-
-.rts-header__wash {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  /* Realtime Scanners money-green grade — bills remain readable */
-  background: linear-gradient(
-    180deg,
-    rgba(18, 72, 42, 0.45) 0%,
-    rgba(10, 52, 30, 0.55) 50%,
-    rgba(6, 40, 22, 0.62) 100%
-  );
-  pointer-events: none;
+  color: var(--text);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
 }
 
 .rts-header__top {
-  position: relative;
-  z-index: 2;
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
@@ -121,13 +95,13 @@ a {
 .rts-countdown {
   justify-self: start;
   margin-left: 6px;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-family: var(--font-display);
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  color: var(--text);
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -149,9 +123,8 @@ a {
   margin: 0;
   border: none;
   background: transparent;
-  color: #fff;
+  color: var(--text);
   cursor: pointer;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -160,8 +133,6 @@ a {
 }
 
 .rts-header__tabs-row {
-  position: relative;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -177,12 +148,11 @@ a {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  border: 1.5px solid var(--border-strong);
   background: transparent;
-  color: #fff;
+  color: var(--text);
   cursor: pointer;
   padding: 0;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
 }
 
 .rts-tabs {
@@ -205,19 +175,18 @@ a {
   flex-shrink: 0;
   border: none;
   background: transparent;
-  color: rgba(255, 255, 255, 0.88);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-  font-size: 16px;
-  font-weight: 400;
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 500;
   padding: 4px 0;
   cursor: pointer;
   white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .rts-tab--active {
-  color: #fff;
-  font-weight: 600;
+  color: var(--text);
+  font-weight: 700;
 }
 
 @media (max-width: 960px) {

@@ -11,11 +11,6 @@ const TABS: { id: ScannerTab; label: string }[] = [
   { id: "news", label: "News" },
 ];
 
-function asset(path: string): string {
-  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
-  return `${base}${path}`;
-}
-
 function IconMenu() {
   return (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -94,13 +89,6 @@ export function ScannerHeader({ activeTab, onTabChange, connected }: Props) {
 
   return (
     <header className="rts-header" role="banner">
-      <div
-        className="rts-header__bg"
-        style={{ backgroundImage: `url(${asset("/header-money-bg.jpg")})` }}
-        aria-hidden
-      />
-      <div className="rts-header__wash" aria-hidden />
-
       <div className="rts-header__top">
         <button type="button" className="rts-icon-btn" aria-label="Menu">
           <IconMenu />
