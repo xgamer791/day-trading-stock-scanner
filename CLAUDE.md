@@ -1,1 +1,2 @@
 @AGENTS.md
+@APP_MEMORY.md
