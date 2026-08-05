@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
-import { fetchLiveScannerClient, fetchSnapshotFeed, rowSynced } from "@/lib/liveClient";
+import { fetchSnapshotFeed } from "@/lib/liveClient";
 import type { MarketSession, ScannerPayload } from "@/lib/types";
 
 function localSession(): MarketSession {
@@ -22,22 +22,6 @@ function localSession(): MarketSession {
   if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
   if (mins >= 16 * 60 && mins < 20 * 60) return "afterhours";
   return "closed";
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("timeout")), ms);
-    promise.then(
-      (v) => {
-        clearTimeout(t);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(t);
-        reject(e);
-      },
-    );
-  });
 }
 
 function ageSeconds(iso?: string): number {
@@ -65,7 +49,8 @@ export function ScannerBoard() {
       if (inFlight.current) return;
       inFlight.current = true;
       try {
-        // PRIMARY: same-origin Actions feed (works without CORS proxies)
+        // ONLY same-origin Actions feed (Yahoo last vs prevClose).
+        // Do NOT overlay flaky CORS/Nasdaq browser upgrades — that re-broke % accuracy.
         const feed = await fetchSnapshotFeed();
         if (cancelled) return;
 
@@ -80,23 +65,6 @@ export function ScannerBoard() {
         setData(feed);
         setConnected(true);
         setError(null);
-
-        // OPTIONAL: faster browser Nasdaq movers — only if it actually returns rows
-        try {
-          const live = await withTimeout(fetchLiveScannerClient(), 3500);
-          if (cancelled) return;
-          if (live.gainers.length >= 5 && live.gainers.every(rowSynced)) {
-            setData({
-              ...live,
-              news: feed.news?.length ? feed.news : live.news,
-              universeCount: feed.universeCount,
-              marketsScreened: feed.marketsScreened,
-              feedLimit: feed.feedLimit ?? live.feedLimit,
-            });
-          }
-        } catch {
-          /* ignore — Actions feed already painted */
-        }
       } catch (err) {
         if (cancelled) return;
         setConnected(false);
@@ -107,7 +75,6 @@ export function ScannerBoard() {
     };
 
     tick();
-    // Poll often; Actions republishes ~every 1 min during market hours
     const id = setInterval(tick, 5000);
     return () => {
       cancelled = true;
@@ -116,7 +83,8 @@ export function ScannerBoard() {
   }, []);
 
   const session = data?.session ?? clockSession;
-  const fresh = ageSeconds(data?.updatedAt) < 120;
+  // Actions republishes ~every 60s; allow deploy lag before calling it stale
+  const fresh = ageSeconds(data?.updatedAt) < 180;
 
   const updatedLabel = data?.updatedAt
     ? new Date(data.updatedAt).toLocaleTimeString("en-US", {
@@ -158,7 +126,7 @@ export function ScannerBoard() {
               Top Gainers
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-              Top 20 · Entire US market · Updates ~1 min
+              Top 20 · Entire US market · ~1 min refresh
             </div>
           </div>
           <SessionBadge session={session} />
@@ -180,11 +148,11 @@ export function ScannerBoard() {
               style={{
                 width: 8,
                 height: 8,
-                background: connected && fresh ? "var(--green)" : "var(--red)",
+                background: connected && fresh ? "var(--green)" : connected ? "var(--text-dim)" : "var(--red)",
                 display: "inline-block",
               }}
             />
-            {connected ? (fresh ? "LIVE" : "STALE") : "RECONNECTING"}
+            {connected ? (fresh ? "LIVE" : "UPDATING") : "RECONNECTING"}
           </span>
           <span>ET {updatedLabel}</span>
           <span
