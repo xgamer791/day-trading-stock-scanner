@@ -21,11 +21,12 @@ Deployed automatically to GitHub Pages on every push to `main`, and refreshed ev
 ## Stack
 
 - Next.js (App Router) + TypeScript
-- Live Yahoo Finance day gainers, premarket movers, and news
-- Optional Polygon key (`POLYGON_API_KEY` / `NEXT_PUBLIC_POLYGON_API_KEY`) for exchange snapshots
-- GitHub Pages + Actions auto-deploy
+- **Nasdaq.com live market movers** (Most Advanced / Most Active across US listings)
+- Full all-exchange screener + S&P 500 breadth
+- Yahoo 1m charts to confirm **true high-of-day**
+- GitHub Pages + Actions auto-deploy (every push + every 5 min in market hours)
 
-> **Why not Yahoo day_gainers?** Yahoo’s predefined gainer list requires **market cap ≥ $2B** and **price ≥ $5**, so it misses low-float runners (e.g. +200% names). We scan the full Nasdaq.com universe instead.
+Only stocks **at/near high of day** are listed. Premarket tab ≠ open-market Gainers tab.
 
 ## Setup
 
