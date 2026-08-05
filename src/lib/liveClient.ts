@@ -3,19 +3,25 @@
  *
  * Every ~3s poll (no mover-row cache):
  *  1) Nasdaq Most Advanced (discovery only — never the ranked board alone)
- *  2) Yahoo day_gainers — REQUIRED primary quotes (price, prevClose, vol, Flt)
- *  3) Yahoo spark for Most Advanced symbols missing from day_gainers (≤30)
- *  4) Live Flt for ranked spark rows via small Nasdaq quote summary
- *     (marketCap/price). NOT the 2MB screener download — proxies cannot carry it.
- *  5) Rank by same-quote % — top 50
+ *  2) Yahoo day_gainers — preferred primary quotes (price, prevClose, vol, Flt)
+ *     via resilient CORS transport (allorigins `/get` unwrap, queued)
+ *  3) Polygon snapshot gainers — durable direct-CORS fallback / parallel live
+ *     board when Yahoo proxies fail (NOT Nasdaq Most Advanced, NOT live.json)
+ *  4) Yahoo spark for Most Advanced symbols missing from the ranked board (≤30)
+ *  5) Live Flt for ranked spark/Polygon rows via small Nasdaq quote summary
+ *  6) Rank by same-quote % — top 50
  *
- * If Yahoo day_gainers fails: throw / RECONNECTING. Do NOT substitute the
- * Nasdaq Most Advanced list as “top gainers” (that swap looked like a random
- * wrong board ~20s in when proxies burned out).
+ * If BOTH Yahoo day_gainers and Polygon fail: throw / RECONNECTING.
+ * Do NOT substitute Nasdaq Most Advanced alone as “top gainers”.
  *
  * FORBIDDEN: live.json, floats.json, last-tick-as-LIVE, localStorage, etc.
- * Never use Nasdaq % with Yahoo last.
+ * Never use Nasdaq % with Yahoo/Polygon last.
  */
+import {
+  fetchPolygonGainerQuotes,
+  hasClientPolygonKey,
+} from "@/lib/clientPolygonLive";
+import { fetchJsonDirect, fetchJsonViaCors } from "@/lib/corsTransport";
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
@@ -23,63 +29,21 @@ const FEED_LIMIT = 50;
 const FLOAT_SYMBOL_MAX = 12;
 const FLOAT_BATCH = 4;
 
-function bust(url: string): string {
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}_=${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-const PROXY_BUILDERS: Array<(enc: string) => string> = [
-  (enc) => `https://corsproxy.io/?${enc}`,
-  (enc) => `https://api.allorigins.win/raw?url=${enc}`,
-  (enc) => `https://api.codetabs.com/v1/proxy?quest=${enc}`,
-];
-
-/** Sticky transport preference only — not quote/float data (STOCK_SCANNER_APP_MEMORY allowed). */
-let preferredProxy = 0;
-
-function proxyUrls(url: string): string[] {
-  const live = bust(url);
-  const enc = encodeURIComponent(live);
-  const builders = [
-    ...PROXY_BUILDERS.slice(preferredProxy),
-    ...PROXY_BUILDERS.slice(0, preferredProxy),
-  ];
-  return builders.map((b) => b(enc));
-}
-
-/** Sequential proxies — racing all three every 3s burns quota and dies ~20s in. */
-async function fetchTextViaProxy(url: string, timeoutMs = 7000): Promise<string> {
-  let lastErr: Error | null = null;
-  const urls = proxyUrls(url);
-  for (let i = 0; i < urls.length; i++) {
-    const p = urls[i];
-    try {
-      const res = await fetch(p, {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) {
-        lastErr = new Error(`proxy ${res.status}`);
-        continue;
-      }
-      const text = await res.text();
-      if (text.trimStart().startsWith("<")) {
-        lastErr = new Error("proxy HTML");
-        continue;
-      }
-      // Remember which builder worked (offset into PROXY_BUILDERS).
-      preferredProxy = (preferredProxy + i) % PROXY_BUILDERS.length;
-      return text;
-    } catch (e) {
-      lastErr = e instanceof Error ? e : new Error(String(e));
-    }
+/**
+ * Prefer direct fetch (Node / non-CORS contexts), then resilient CORS proxies
+ * for the GitHub Pages browser. Never reads live.json.
+ */
+async function fetchViaProxy(
+  url: string,
+  timeoutMs = 16000,
+  priority: "critical" | "normal" | "low" = "critical",
+): Promise<unknown> {
+  try {
+    return await fetchJsonDirect(url, Math.min(timeoutMs, 10000));
+  } catch {
+    /* browser CORS — fall through to public / owned proxies */
   }
-  throw lastErr || new Error("All live proxies failed");
-}
-
-async function fetchViaProxy(url: string, timeoutMs = 7000): Promise<unknown> {
-  return JSON.parse(await fetchTextViaProxy(url, timeoutMs));
+  return fetchJsonViaCors(url, timeoutMs, priority);
 }
 
 function parseMoney(v: unknown): number {
@@ -181,7 +145,8 @@ function quoteFromLastPrev(
 async function fetchMostAdvanced(): Promise<Seed[]> {
   const data = (await fetchViaProxy(
     "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50",
-    7000,
+    14000,
+    "normal",
   )) as {
     data?: { STOCKS?: { MostAdvanced?: { table?: { rows?: Array<Record<string, string>> } } } };
   };
@@ -204,17 +169,38 @@ async function fetchMostAdvanced(): Promise<Seed[]> {
  * no floats.json / in-memory float cache.
  */
 async function fetchYahooDayGainerQuotes(): Promise<Map<string, LiveQuote>> {
-  const data = (await fetchViaProxy(
-    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=100&scrIds=day_gainers&formatted=false",
-    8000,
-  )) as {
+  // allorigins/get often needs ~10–16s — do not use a short timeout (Safari Load failed).
+  // Retry: public proxies flake; one miss must not blank the whole Gainers board.
+  type DayGainersPayload = {
     finance?: {
       result?: Array<{
         quotes?: Array<Record<string, unknown>>;
       }>;
     };
   };
-  const quotes = data?.finance?.result?.[0]?.quotes || [];
+  let lastErr: Error | null = null;
+  let data: DayGainersPayload | null = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      data = (await fetchViaProxy(
+        "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=100&scrIds=day_gainers&formatted=false",
+        18000,
+        "critical",
+      )) as DayGainersPayload;
+      const n = data?.finance?.result?.[0]?.quotes?.length || 0;
+      if (n > 0) break;
+      lastErr = new Error("day_gainers empty");
+      data = null;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      data = null;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+    }
+  }
+  if (!data) throw lastErr || new Error("Live Yahoo day_gainers unavailable");
+
+  const quotes = data.finance?.result?.[0]?.quotes || [];
   const map = new Map<string, LiveQuote>();
   for (const q of quotes) {
     const symbol = String(q.symbol || "")
@@ -260,7 +246,7 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote
   let data: SparkPayload | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      data = (await fetchViaProxy(url, 8000)) as SparkPayload;
+      data = (await fetchViaProxy(url, 16000, "normal")) as SparkPayload;
       break;
     } catch {
       if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
@@ -337,7 +323,8 @@ async function fetchLiveMarketCaps(symbols: string[]): Promise<Map<string, numbe
         try {
           const data = (await fetchViaProxy(
             `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,
-            7000,
+            12000,
+            "low",
           )) as {
             data?: { summaryData?: { MarketCap?: { value?: string } } };
           };
@@ -388,6 +375,26 @@ function toMover(q: LiveQuote): StockMover {
   };
 }
 
+function polygonToLiveQuotes(
+  poly: Awaited<ReturnType<typeof fetchPolygonGainerQuotes>>,
+): Map<string, LiveQuote> {
+  const map = new Map<string, LiveQuote>();
+  for (const [sym, q] of poly) {
+    map.set(sym, {
+      symbol: q.symbol,
+      name: q.name,
+      last: q.last,
+      prevClose: q.prevClose,
+      dayHigh: q.dayHigh,
+      dayLow: q.dayLow,
+      volume: q.volume,
+      changePct: q.changePct,
+      floatMillions: q.floatMillions,
+    });
+  }
+  return map;
+}
+
 /** Live scan — no live.json, no floats.json, no last-tick paint. */
 export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   const session = sessionNow();
@@ -395,25 +402,60 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   let advanced: Seed[] = [];
   let dayGainers = new Map<string, LiveQuote>();
   let yahooErr: Error | null = null;
+  let polygonErr: Error | null = null;
+  let sourceLabel: ScannerPayload["source"] = "full-us-realtime";
 
-  const [advRes, yahooRes] = await Promise.allSettled([
-    fetchMostAdvanced(),
+  const usePolygon = hasClientPolygonKey();
+
+  // Ranked board first — do not let Most Advanced discovery occupy the proxy
+  // queue ahead of Yahoo day_gainers (Safari Load failed / slow first paint).
+  const [yahooRes, polyRes] = await Promise.allSettled([
     fetchYahooDayGainerQuotes(),
+    usePolygon ? fetchPolygonGainerQuotes(FEED_LIMIT) : Promise.resolve(null),
   ]);
 
-  if (advRes.status === "fulfilled") advanced = advRes.value;
-  // Discovery soft-fail — Most Advanced is optional; day_gainers is not.
-
   if (yahooRes.status === "fulfilled") dayGainers = yahooRes.value;
-  else yahooErr = yahooRes.reason instanceof Error ? yahooRes.reason : new Error(String(yahooRes.reason));
-
-  // HARD: Yahoo day_gainers is the ranked board. Never paint Most Advanced /
-  // spark-only as top gainers when day_gainers is down (wrong list swap).
-  if (!dayGainers.size) {
-    throw yahooErr || new Error("Live Yahoo day_gainers unavailable");
+  else {
+    yahooErr =
+      yahooRes.reason instanceof Error
+        ? yahooRes.reason
+        : new Error(String(yahooRes.reason));
   }
 
-  const quotes = new Map<string, LiveQuote>(dayGainers);
+  let polygonGainers = new Map<string, LiveQuote>();
+  if (usePolygon) {
+    if (polyRes.status === "fulfilled" && polyRes.value) {
+      polygonGainers = polygonToLiveQuotes(polyRes.value);
+    } else if (polyRes.status === "rejected") {
+      polygonErr =
+        polyRes.reason instanceof Error
+          ? polyRes.reason
+          : new Error(String(polyRes.reason));
+    }
+  }
+
+  // Prefer Yahoo day_gainers when available (Flt + product parity).
+  // If Yahoo CORS proxies fail: Polygon live gainers (direct CORS).
+  // NEVER paint Most Advanced / spark-only as the ranked board.
+  let quotes: Map<string, LiveQuote>;
+  if (dayGainers.size) {
+    quotes = new Map(dayGainers);
+    sourceLabel = "full-us-realtime";
+  } else if (polygonGainers.size) {
+    quotes = new Map(polygonGainers);
+    sourceLabel = "polygon";
+  } else {
+    const detail = [yahooErr?.message, polygonErr?.message].filter(Boolean).join(" | ");
+    throw new Error(
+      detail ? `Live gainers unavailable: ${detail}` : "Live Yahoo day_gainers unavailable",
+    );
+  }
+
+  try {
+    advanced = await fetchMostAdvanced();
+  } catch {
+    /* discovery optional */
+  }
 
   const missing = advanced.map((s) => s.symbol).filter((s) => !quotes.has(s));
   if (missing.length) {
@@ -422,7 +464,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
       const spark = await fetchYahooSpark(missing);
       for (const [sym, q] of spark) quotes.set(sym, q);
     } catch {
-      /* day_gainers board still valid without spark fill */
+      /* ranked board still valid without spark fill */
     }
   }
 
@@ -440,7 +482,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, FEED_LIMIT);
 
-  // Flt for ranked spark rows only (day_gainers already carry Yahoo share counts).
+  // Flt for ranked rows missing share counts (spark / Polygon).
   const stillNeed = movers.filter((m) => m.floatMillions == null).map((m) => m.symbol);
   if (stillNeed.length) {
     try {
@@ -462,7 +504,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   return {
     session,
     updatedAt: new Date().toISOString(),
-    source: "full-us-realtime",
+    source: sourceLabel,
     feedLimit: FEED_LIMIT,
     news,
     premarket: session === "closed" ? [] : movers,

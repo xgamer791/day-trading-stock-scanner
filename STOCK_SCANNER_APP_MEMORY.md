@@ -56,10 +56,18 @@ This is non-negotiable. Violating it is a failed change.
    - Short-lived discovery **symbol** candidate list (which tickers to quote next) — never reuse stale price/%/vol/Flt as LIVE
    - Sticky CORS **proxy preference** (transport only)
    - Static app shell (HTML/JS/CSS) on GitHub Pages — that is not the live feed
+   - **Polygon.io snapshot gainers** as a live ranked board when Yahoo `day_gainers` CORS transport fails (direct browser CORS — not a cache). Still must recompute % from same payload last+prevClose.
 4. **On live fetch failure:** show RECONNECTING / error and **clear** mover rows. Do **not** substitute snapshot/cached gainers. Empty or error > wrong/stale numbers.
 5. **%Chg math (must match TradingView / Realtime):**  
    `(last − previousClose) / previousClose` from the **same quote payload**. Never pair Yahoo last with Nasdaq screener %.
 6. If GitHub Pages CORS forces a proxy: proxies are for transport only. They must still return **current** API payloads. A proxy is not a license to serve `live.json` or `floats.json`.
+
+### Safari “Load failed” / durable browser transport
+
+- Public proxies (`corsproxy.io` `/raw`, etc.) are unreliable; Safari often surfaces `TypeError: Load failed`.
+- Client transport: `src/lib/corsTransport.ts` — prefer **allorigins `/get` + unwrap `contents`**, sticky preference, circuit breaker, quote priority queue. Optional `NEXT_PUBLIC_QUOTE_PROXY_URL` (see `workers/quote-proxy/`).
+- **Polygon** (`NEXT_PUBLIC_POLYGON_API_KEY` from Actions secret `POLYGON_API_KEY`) is the durable no-proxy path — Polygon reflects ACAO for the Pages origin. Prefer Yahoo `day_gainers` when the proxy path works; if it fails, use Polygon live gainers. **Never** paint Nasdaq Most Advanced alone.
+- Pages builds must not ship an empty `NEXT_PUBLIC_POLYGON_API_KEY` if Polygon is expected — set the Actions secret.
 
 ---
 
@@ -89,11 +97,11 @@ Related failure (~20s “list randomly switches to a completely different board�
 - Keep Flt summary proxy traffic small so it does not knock out `day_gainers`.
 
 **Required live path (client):**
-1. Discover via live **Nasdaq Most Advanced** each poll (runners / discovery only). Primary quotes from **Yahoo day_gainers** — `regularMarketPrice`, `regularMarketPreviousClose`, `regularMarketVolume`, and Flt share counts (`impliedSharesOutstanding` → `sharesOutstanding`) on the **same live payload**. Spark only fills Most Advanced symbols missing from day_gainers (≤30).
-2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**. If `day_gainers` is empty/failed → error, do **not** substitute Most Advanced.
+1. Discover via live **Nasdaq Most Advanced** each poll (runners / discovery only). Prefer primary quotes from **Yahoo day_gainers** — `regularMarketPrice`, `regularMarketPreviousClose`, `regularMarketVolume`, and Flt share counts (`impliedSharesOutstanding` → `sharesOutstanding`) on the **same live payload**. If Yahoo transport fails: **Polygon snapshot gainers** (live, direct CORS). Spark only fills Most Advanced symbols missing from the ranked board (≤30).
+2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**. If both `day_gainers` and Polygon fail → error, do **not** substitute Most Advanced.
 3. **Flt** each poll (live only):
    - Prefer Yahoo day_gainers `impliedSharesOutstanding` when the row came from that payload.
-   - For Most Advanced / spark runners (usually **absent** from day_gainers): live-fetch small Nasdaq `quote/.../summary` **marketCap** (batched) and compute `marketCap / livePrice / 1e6`.
+   - For Most Advanced / spark / Polygon runners missing share counts: live-fetch small Nasdaq `quote/.../summary` **marketCap** (batched) and compute `marketCap / livePrice / 1e6`.
    - **Do not** use the 2MB Nasdaq `download=true` screener for Flt — CORS proxies cannot deliver it, which leaves the whole Flt column blank.
    - Never `floats.json` / cross-poll float cache. Never use Nasdaq % for displayed %Chg.
    - Flt must not kill the quote poll; a single symbol may blank, but the column must not be systematically empty.
@@ -118,7 +126,7 @@ Related failure (~20s “list randomly switches to a completely different board�
 - [ ] %Chg recomputes from same quote’s last + prevClose
 - [ ] Price, volume, %Chg, and Flt come from the live poll — not cross-poll caches
 - [ ] Failed live poll does not paint snapshot/cached movers as LIVE (rows cleared)
-- [ ] Failed `day_gainers` does not paint Most Advanced / spark-only as the gainers board
-- [ ] **VERIFY YOUR WORK:** live Pages Gainers table shows numeric Flt for most top runners; LIVE not stuck RECONNECTING
+- [ ] Failed `day_gainers` does not paint Most Advanced / spark-only as the gainers board (Polygon live OK; Most Advanced alone not OK)
+- [ ] **VERIFY YOUR WORK:** live Pages Gainers table shows numeric Flt for most top runners; LIVE not stuck RECONNECTING / “Load failed”
 - [ ] Deployed Pages link verified after change
 - [ ] If user asked for a second-agent visual check: use **another Grok agent**, not another provider

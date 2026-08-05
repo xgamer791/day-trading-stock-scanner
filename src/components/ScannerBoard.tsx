@@ -52,7 +52,13 @@ export function ScannerBoard() {
       } catch (err) {
         if (cancelled) return;
         setConnected(false);
-        setError(err instanceof Error ? err.message : "Failed to load live data");
+        const raw = err instanceof Error ? err.message : "Failed to load live data";
+        // Safari often surfaces opaque TypeError "Load failed" for proxy/CORS failures.
+        const msg =
+          /load failed|failed to fetch|networkerror|aborted/i.test(raw)
+            ? "Live feed reconnecting (quote transport)…"
+            : raw;
+        setError(msg);
         // STOCK_SCANNER_APP_MEMORY: on failure show RECONNECTING/error — do NOT paint stale last-tick rows.
         setData(null);
       } finally {

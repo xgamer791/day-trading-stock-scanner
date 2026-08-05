@@ -3,46 +3,8 @@
  * Progressive: quick sources first, then full registry. Soft-fail.
  */
 import { enrichNewsWithQuotes, fetchLiveNews, fetchLiveNewsQuick } from "@/lib/liveNews";
+import { fetchJsonViaCors } from "@/lib/corsTransport";
 import type { NewsItem } from "@/lib/types";
-
-function bust(url: string): string {
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}_=${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-const PROXY_BUILDERS: Array<(enc: string) => string> = [
-  (enc) => `https://api.allorigins.win/raw?url=${enc}`,
-  (enc) => `https://api.codetabs.com/v1/proxy?quest=${enc}`,
-  (enc) => `https://corsproxy.io/?${enc}`,
-];
-
-async function fetchJson(url: string): Promise<unknown> {
-  const live = bust(url);
-  const enc = encodeURIComponent(live);
-  let lastErr: Error | null = null;
-  for (const b of PROXY_BUILDERS) {
-    try {
-      const res = await fetch(b(enc), {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        signal: AbortSignal.timeout(6000),
-      });
-      if (!res.ok) {
-        lastErr = new Error(`proxy ${res.status}`);
-        continue;
-      }
-      const text = await res.text();
-      if (text.trimStart().startsWith("<")) {
-        lastErr = new Error("html");
-        continue;
-      }
-      return JSON.parse(text);
-    } catch (e) {
-      lastErr = e instanceof Error ? e : new Error(String(e));
-    }
-  }
-  throw lastErr || new Error("quote proxy failed");
-}
 
 async function sparkQuotes(
   symbols: string[],
@@ -60,7 +22,8 @@ async function sparkQuotes(
       }>;
     };
   };
-  const data = (await fetchJson(url)) as SparkPayload;
+  // Soft enrichment only — never block / burn the gainers queue.
+  const data = (await fetchJsonViaCors(url, 12000, "low", { queue: false })) as SparkPayload;
   for (const item of data.spark?.result || []) {
     const meta = item.response?.[0]?.meta;
     if (!meta) continue;

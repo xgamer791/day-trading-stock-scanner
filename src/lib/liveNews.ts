@@ -12,6 +12,7 @@ import {
   tickerNewsSources,
   type NewsSource,
 } from "@/lib/newsSources";
+import { fetchJsonViaCors, fetchTextViaCors } from "@/lib/corsTransport";
 import type { NewsItem } from "@/lib/types";
 
 const NEWS_LIMIT = 100;
@@ -27,52 +28,13 @@ type RawNews = {
   weight: number;
 };
 
-function bust(url: string): string {
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}_=${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-const PROXY_BUILDERS: Array<(enc: string) => string> = [
-  (enc) => `https://api.allorigins.win/raw?url=${enc}`,
-  (enc) => `https://api.codetabs.com/v1/proxy?quest=${enc}`,
-  (enc) => `https://corsproxy.io/?${enc}`,
-];
-
+/** News uses shared proxy unwrap but skips the gainers queue (must not starve quotes). */
 async function fetchTextViaProxy(url: string, timeoutMs = 9000): Promise<string> {
-  const live = bust(url);
-  const enc = encodeURIComponent(live);
-  let lastErr: Error | null = null;
-  for (let i = 0; i < PROXY_BUILDERS.length; i++) {
-    const b = PROXY_BUILDERS[i];
-    // Don’t stack full timeouts across every proxy — first gets budget, rest get less.
-    const budget = i === 0 ? timeoutMs : Math.min(5000, Math.max(2500, Math.floor(timeoutMs * 0.55)));
-    try {
-      const res = await fetch(b(enc), {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        signal: AbortSignal.timeout(budget),
-      });
-      if (!res.ok) {
-        lastErr = new Error(`proxy ${res.status}`);
-        continue;
-      }
-      const text = await res.text();
-      if (!text.trim()) {
-        lastErr = new Error("empty");
-        continue;
-      }
-      return text;
-    } catch (e) {
-      lastErr = e instanceof Error ? e : new Error(String(e));
-    }
-  }
-  throw lastErr || new Error("All news proxies failed");
+  return fetchTextViaCors(url, timeoutMs, "low", { queue: false });
 }
 
 async function fetchJsonViaProxy(url: string, timeoutMs = 9000): Promise<unknown> {
-  const text = await fetchTextViaProxy(url, timeoutMs);
-  if (text.trimStart().startsWith("<")) throw new Error("proxy HTML");
-  return JSON.parse(text);
+  return fetchJsonViaCors(url, timeoutMs, "low", { queue: false });
 }
 
 function decodeXml(s: string): string {
@@ -276,9 +238,10 @@ async function runSources(sources: NewsSource[], opts?: { deadlineMs?: number; p
   const deadline = Date.now() + (opts?.deadlineMs ?? 55_000);
   const perSourceMs = opts?.perSourceMs ?? 10_000;
 
-  for (let i = 0; i < sources.length; i += 6) {
+  // Keep news concurrency low so public proxies stay usable for Gainers.
+  for (let i = 0; i < sources.length; i += 2) {
     if (Date.now() >= deadline) break;
-    const chunk = sources.slice(i, i + 6);
+    const chunk = sources.slice(i, i + 2);
     const remaining = Math.max(1500, deadline - Date.now());
     const parts = await Promise.allSettled(
       chunk.map((s) =>
