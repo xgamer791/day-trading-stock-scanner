@@ -3,25 +3,74 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
 import { fetchLiveScannerClient, liveJsonUrl } from "@/lib/liveClient";
-import type { ScannerPayload } from "@/lib/types";
+import type { MarketSession, ScannerPayload } from "@/lib/types";
+
+function localSession(): MarketSession {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
+  if (["Sat", "Sun"].includes(weekday)) return "closed";
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  const mins = hour * 60 + minute;
+  if (mins >= 4 * 60 && mins < 9 * 60 + 30) return "premarket";
+  if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
+  if (mins >= 16 * 60 && mins < 20 * 60) return "afterhours";
+  return "closed";
+}
+
+async function fetchSnapshot(): Promise<ScannerPayload> {
+  const res = await fetch(liveJsonUrl(), { cache: "no-store" });
+  if (!res.ok) throw new Error(`Snapshot unavailable (${res.status})`);
+  return (await res.json()) as ScannerPayload;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("timeout")), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
 
 async function loadScanner(): Promise<ScannerPayload> {
-  // Primary: browser live pull (all US listings via composite movers + HOD confirm)
+  // Fast path: same-origin snapshot (always works on GitHub Pages)
+  const snapshot = await fetchSnapshot();
+
+  // Best-effort realtime upgrade (CORS proxies). Must not block UI.
   try {
-    return await fetchLiveScannerClient();
-  } catch (err) {
-    console.warn("Live client scan failed, trying published snapshot:", err);
+    const live = await withTimeout(fetchLiveScannerClient(), 4000);
+    if (live.gainers.length || live.premarket.length) {
+      return {
+        ...live,
+        news: live.news.length ? live.news : snapshot.news,
+      };
+    }
+  } catch {
+    /* keep snapshot */
   }
 
-  const res = await fetch(liveJsonUrl(), { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Live market data unavailable (${res.status})`);
-  }
-  const payload = (await res.json()) as ScannerPayload;
-  if (!payload.gainers?.length && !payload.premarket?.length && payload.session === "regular") {
+  if (
+    !snapshot.gainers?.length &&
+    !snapshot.premarket?.length &&
+    localSession() === "regular"
+  ) {
     throw new Error("Live market data returned no HOD movers");
   }
-  return payload;
+  return snapshot;
 }
 
 export function ScannerBoard() {
@@ -29,6 +78,12 @@ export function ScannerBoard() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("mkt");
+  const [clockSession, setClockSession] = useState<MarketSession>(localSession);
+
+  useEffect(() => {
+    const id = setInterval(() => setClockSession(localSession()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,13 +103,14 @@ export function ScannerBoard() {
     };
 
     tick();
-    // Near real-time: refresh continuously during the session
-    const id = setInterval(tick, 3000);
+    const id = setInterval(tick, 5000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
   }, []);
+
+  const session = data?.session ?? clockSession;
 
   const updatedLabel = data?.updatedAt
     ? new Date(data.updatedAt).toLocaleTimeString("en-US", {
@@ -67,10 +123,10 @@ export function ScannerBoard() {
     : "—";
 
   const sourceLabel =
-    data?.source === "polygon"
-      ? "POLYGON"
-      : data?.source === "full-us-realtime"
-        ? "US ALL-MKTS"
+    data?.source === "full-us-realtime"
+      ? "US ALL-MKTS"
+      : data?.source === "polygon"
+        ? "POLYGON"
         : data
           ? "HOD LIVE"
           : "LOADING";
@@ -108,7 +164,7 @@ export function ScannerBoard() {
               High-of-day only · NYSE · NASDAQ · AMEX · full US
             </div>
           </div>
-          <SessionBadge session={data?.session ?? "closed"} />
+          <SessionBadge session={session} />
         </div>
 
         <div
@@ -131,7 +187,7 @@ export function ScannerBoard() {
                 display: "inline-block",
               }}
             />
-            {connected ? "LIVE 3s" : "RECONNECTING"}
+            {connected ? "LIVE" : "RECONNECTING"}
           </span>
           <span>ET {updatedLabel}</span>
           <span
@@ -213,7 +269,7 @@ export function ScannerBoard() {
           <PanelHeader
             title="Premarket"
             subtitle={
-              data?.session === "premarket"
+              session === "premarket"
                 ? "Premarket HOD peaks — all US markets"
                 : "Today's gap plays still at high of day"
             }
@@ -232,7 +288,7 @@ export function ScannerBoard() {
           <PanelHeader
             title="Market Top Gainers"
             subtitle={
-              data?.session === "premarket"
+              session === "premarket"
                 ? "Opens 9:30 AM ET — open-market HOD only"
                 : "Open-market HOD peaks — NYSE / NASDAQ / AMEX"
             }
@@ -243,9 +299,11 @@ export function ScannerBoard() {
             emptyText={
               error
                 ? "Live data error"
-                : data?.session === "premarket"
+                : session === "premarket"
                   ? "Market not open yet"
-                  : "No open-market HOD peaks right now"
+                  : session === "closed"
+                    ? "Market closed"
+                    : "Loading HOD gainers…"
             }
           />
         </section>

@@ -19,9 +19,24 @@ async function fetchViaProxy(url: string): Promise<Response> {
   let lastErr: Error | null = null;
   for (const p of proxies(url)) {
     try {
-      const res = await fetch(p, { cache: "no-store" });
-      if (res.ok) return res;
-      lastErr = new Error(`proxy ${res.status}`);
+      const res = await fetch(p, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) {
+        lastErr = new Error(`proxy ${res.status}`);
+        continue;
+      }
+      const text = await res.text();
+      // corsproxy sometimes returns HTML interstitial
+      if (text.trimStart().startsWith("<!DOCTYPE") || text.trimStart().startsWith("<html")) {
+        lastErr = new Error("proxy returned HTML");
+        continue;
+      }
+      return new Response(text, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
     }
