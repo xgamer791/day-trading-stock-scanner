@@ -50,7 +50,11 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 - Actions or Yahoo feed was correct, then a browser “upgrade” overwrote rows with Nasdaq Most Advanced % while keeping another last price (or inventing prevClose from Nasdaq % so `rowSynced` passed).
 - **Never overlay** a secondary Nasdaq-% feed on top of an accurate last/prevClose feed.
 
-Prefer one live path: discover symbols (e.g. Nasdaq Most Advanced / full screener) → quote via Yahoo batch/spark or per-symbol chart → rank by computed live %.
+**Required live path (client):**
+1. Discover symbols via live Nasdaq Most Advanced + full US screener (proxied)
+2. Quote via **Yahoo spark batch** (`v7/finance/spark`) — last + previousClose from same meta
+3. Rank by `(last − previousClose) / previousClose`
+4. Poll ~every 5s; on failure clear the board (error), never fall back to `live.json`
 
 ---
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
-import { fetchSnapshotFeed } from "@/lib/liveClient";
+import { fetchLiveScannerClient } from "@/lib/liveClient";
 import type { MarketSession, ScannerPayload } from "@/lib/types";
 
 function localSession(): MarketSession {
@@ -22,11 +22,6 @@ function localSession(): MarketSession {
   if (mins >= 9 * 60 + 30 && mins < 16 * 60) return "regular";
   if (mins >= 16 * 60 && mins < 20 * 60) return "afterhours";
   return "closed";
-}
-
-function ageSeconds(iso?: string): number {
-  if (!iso) return 99999;
-  return Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
 }
 
 export function ScannerBoard() {
@@ -49,26 +44,27 @@ export function ScannerBoard() {
       if (inFlight.current) return;
       inFlight.current = true;
       try {
-        // ONLY same-origin Actions feed (Yahoo last vs prevClose).
-        // Do NOT overlay flaky CORS/Nasdaq browser upgrades — that re-broke % accuracy.
-        const feed = await fetchSnapshotFeed();
+        // LIVE ONLY — never live.json / snapshot (APP_MEMORY.md)
+        const live = await fetchLiveScannerClient();
         if (cancelled) return;
 
         if (
-          !feed.gainers?.length &&
-          !feed.premarket?.length &&
+          !live.gainers.length &&
+          !live.premarket.length &&
           localSession() === "regular"
         ) {
-          throw new Error("Market feed has no top gainers yet");
+          throw new Error("Live market data returned no top gainers");
         }
 
-        setData(feed);
+        setData(live);
         setConnected(true);
         setError(null);
       } catch (err) {
         if (cancelled) return;
         setConnected(false);
         setError(err instanceof Error ? err.message : "Failed to load live data");
+        // APP_MEMORY: do not keep painting stale rows as LIVE
+        setData(null);
       } finally {
         inFlight.current = false;
       }
@@ -83,8 +79,6 @@ export function ScannerBoard() {
   }, []);
 
   const session = data?.session ?? clockSession;
-  // Actions republishes ~every 60s; allow deploy lag before calling it stale
-  const fresh = ageSeconds(data?.updatedAt) < 180;
 
   const updatedLabel = data?.updatedAt
     ? new Date(data.updatedAt).toLocaleTimeString("en-US", {
@@ -126,7 +120,7 @@ export function ScannerBoard() {
               Top Gainers
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-              Top 20 · Entire US market · ~1 min refresh
+              Live API only · Top 20 · Entire US market · 5s poll
             </div>
           </div>
           <SessionBadge session={session} />
@@ -144,15 +138,15 @@ export function ScannerBoard() {
         >
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span
-              className={connected && fresh ? "live-dot" : undefined}
+              className={connected ? "live-dot" : undefined}
               style={{
                 width: 8,
                 height: 8,
-                background: connected && fresh ? "var(--green)" : connected ? "var(--text-dim)" : "var(--red)",
+                background: connected ? "var(--green)" : "var(--red)",
                 display: "inline-block",
               }}
             />
-            {connected ? (fresh ? "LIVE" : "UPDATING") : "RECONNECTING"}
+            {connected ? "LIVE" : "RECONNECTING"}
           </span>
           <span>ET {updatedLabel}</span>
           <span
@@ -162,12 +156,12 @@ export function ScannerBoard() {
               color: "var(--hod)",
             }}
           >
-            US MARKET
+            NO CACHE
           </span>
         </div>
       </div>
 
-      {error && !data && (
+      {error && (
         <div
           style={{
             padding: "14px 20px",
@@ -233,16 +227,12 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Premarket"
-            subtitle={
-              session === "premarket"
-                ? "Top 20 premarket gainers — entire US market"
-                : "Top 20 gap leaders — entire US market"
-            }
+            subtitle="Live top gainers / gaps — entire US market"
             count={data?.premarket.length ?? 0}
           />
           <StockTable
             rows={data?.premarket ?? []}
-            emptyText={error && !data ? "Live data error" : "No premarket gainers right now"}
+            emptyText={error ? "Live data error" : "No premarket gainers right now"}
           />
         </section>
 
@@ -254,21 +244,21 @@ export function ScannerBoard() {
             title="Market Top Gainers"
             subtitle={
               session === "premarket"
-                ? "Opens 9:30 AM ET — top 20 open-market gainers"
-                : "Top 20 % gainers — entire US market"
+                ? "Opens 9:30 AM ET — live open-market gainers"
+                : "Live top 20 % gainers — entire US market"
             }
             count={data?.gainers.length ?? 0}
           />
           <StockTable
             rows={data?.gainers ?? []}
             emptyText={
-              error && !data
+              error
                 ? "Live data error"
                 : session === "premarket"
                   ? "Market not open yet"
                   : session === "closed"
                     ? "Market closed"
-                    : "Loading gainers…"
+                    : "Scanning live…"
             }
           />
         </section>
