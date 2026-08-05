@@ -24,7 +24,7 @@ Auto-deploys on every push to `main`. The browser polls **live Nasdaq + Yahoo sp
 
 **Indexes:** Nasdaq Composite, Nasdaq-100, Dow Jones Industrial Average, S&P 500, S&P MidCap 400, S&P SmallCap 600, Russell 1000, Russell 2000, Russell 3000
 
-Universe is rebuilt from official Nasdaq Trader symbol directories + index membership lists (`public/data/coverage.json`). Live ranking scrapes the **full Nasdaq.com composite screener** (all US listings) plus live Most Advanced movers. Feeds show the **top 20** % gainers only.
+Universe is rebuilt from official Nasdaq Trader symbol directories + index membership lists (`public/data/coverage.json`). Live ranking scrapes the **full Nasdaq.com composite screener** (all US listings) plus live Most Advanced movers. Feeds show the **top 50** % gainers only.
 
 ## Data sources
 

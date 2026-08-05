@@ -57,7 +57,7 @@ export function buildFromPolygon(
     .filter((m): m is StockMover => Boolean(m));
 
   const session = getMarketSession();
-  const top = filterHodGainers(movers, { minChangePct: 0, limit: 20 });
+  const top = filterHodGainers(movers, { minChangePct: 0, limit: 50 });
 
   const news: NewsItem[] = (newsJson.results ?? []).map((n) => ({
     id: n.id,

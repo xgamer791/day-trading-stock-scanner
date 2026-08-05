@@ -23,6 +23,7 @@ This is non-negotiable. Violating it is a failed change.
 3. **Allowed:**
    - `cache: "no-store"` + cache-bust query params on fetches
    - Short-lived in-flight request dedupe (same tick only)
+   - Short-lived discovery **symbol** candidate list (which tickers to quote next) — never reuse stale price/% as LIVE
    - Static app shell (HTML/JS/CSS) on GitHub Pages — that is not the live feed
 4. **On live fetch failure:** show RECONNECTING / error. Do **not** substitute snapshot/cached gainers. Empty or error > wrong/stale numbers.
 5. **%Chg math (must match TradingView / Realtime):**  
@@ -34,7 +35,7 @@ This is non-negotiable. Violating it is a failed change.
 ## Product rules
 
 - **Only ranking filter:** top % gainers (positive change). No HOD / min-price / min-volume gates for inclusion.
-- **Feeds:** top 20.
+- **Feeds:** top 50.
 - **Markets:** full US listed equities (NASDAQ, NYSE, AMEX/Arca, etc.).
 - **Junk filter OK:** warrants / units / rights / preferreds / leveraged ETFs (retail screener parity).
 - **Premarket tab ≠ Gainers tab** (session-aware).
@@ -51,9 +52,9 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 - **Never overlay** a secondary Nasdaq-% feed on top of an accurate last/prevClose feed.
 
 **Required live path (client):**
-1. Discover via live **Nasdaq Most Advanced** each poll (small). Do **not** hit the 10k full screener every 3s — that rate-limits CORS proxies and dies ~20s in.
-2. Quote via **Yahoo spark batch** (`v7/finance/spark`) — last + previousClose from same meta
-3. Rank by `(last − previousClose) / previousClose`
+1. Discover via live **Nasdaq Most Advanced** + **Yahoo day_gainers** each poll. Refresh broad Nasdaq download candidates ~every 45s for breadth beyond Most Advanced’s ~20-name cap. Do **not** hit the 10k full screener every 3s — that rate-limits CORS proxies and dies ~20s in. Candidate lists are for symbol discovery only — never paint their % as LIVE.
+2. Quote via **Yahoo spark batches** (`v7/finance/spark`) — last + previousClose from same meta
+3. Rank by `(last − previousClose) / previousClose`; show **top 50**
 4. Poll ~every **3s**; on failure show RECONNECTING (not LIVE). Never fall back to `live.json`.
 
 ---

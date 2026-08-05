@@ -70,7 +70,7 @@ export function filterHodGainers(
   movers: StockMover[],
   opts: { minChangePct?: number; minVolume?: number; minPrice?: number; maxPrice?: number; limit?: number } = {},
 ): StockMover[] {
-  const { minChangePct = 0, limit = 20 } = opts;
+  const { minChangePct = 0, limit = 50 } = opts;
   void opts.minVolume;
   void opts.minPrice;
   void opts.maxPrice;

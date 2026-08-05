@@ -119,7 +119,7 @@ export function ScannerBoard() {
               Top Gainers
             </div>
             <div style={{ marginTop: 4, fontSize: 13, color: "var(--text-dim)" }}>
-              Live API only · Top 20 · Entire US market · 3s poll
+              Live API only · Top 50 · Entire US market · 3s poll
             </div>
           </div>
           <SessionBadge session={session} />
@@ -244,7 +244,7 @@ export function ScannerBoard() {
             subtitle={
               session === "premarket"
                 ? "Opens 9:30 AM ET — live open-market gainers"
-                : "Live top 20 % gainers — entire US market"
+                : "Live top 50 % gainers — entire US market"
             }
             count={data?.gainers.length ?? 0}
           />

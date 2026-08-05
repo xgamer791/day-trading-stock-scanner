@@ -2,15 +2,22 @@
  * LIVE-ONLY client feed (APP_MEMORY.md).
  *
  * Hot path every ~3s (keeps CORS proxies alive):
- *  1) Nasdaq Most Advanced (small live discovery — Realtime Screener parity)
- *  2) Yahoo spark batch for those symbols (last + prevClose)
+ *  1) Discover candidates: Nasdaq Most Advanced + Yahoo day_gainers
+ *     (+ occasional Nasdaq download for breadth beyond Most Advanced's ~20)
+ *  2) Yahoo spark batches (last + prevClose from same meta)
+ *  3) Rank by same-quote % — top 50
  *
  * Full 10k screener is NOT polled every tick (rate-limits proxies ~20s in).
  * NEVER reads live.json for mover rows.
+ * Discovery candidate list is NOT painted as LIVE % — only used to choose symbols to quote.
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
-const FEED_LIMIT = 20;
+const FEED_LIMIT = 50;
+const SPARK_BATCH = 40;
+const MAX_QUOTE_SYMBOLS = 120;
+/** How often to refresh broad screener symbol candidates (discovery only). */
+const CANDIDATE_REFRESH_MS = 45_000;
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
@@ -94,7 +101,7 @@ function sessionNow(): ScannerPayload["session"] {
   return "closed";
 }
 
-type Seed = { symbol: string; name: string };
+type Seed = { symbol: string; name: string; priority: number };
 
 async function fetchMostAdvanced(): Promise<Seed[]> {
   const data = (await fetchViaProxy(
@@ -105,24 +112,37 @@ async function fetchMostAdvanced(): Promise<Seed[]> {
   };
   const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
   const out: Seed[] = [];
+  let i = 0;
   for (const r of rows) {
     if (isJunk(r.symbol, r.name)) continue;
     if (!(parseMoney(r.change) > 0)) continue;
     out.push({
       symbol: String(r.symbol).replace("/", "-").toUpperCase(),
       name: r.name || r.symbol,
+      // Highest priority — these are the live runners Most Advanced surfaces.
+      priority: 1_000_000 - i,
     });
+    i += 1;
   }
   return out;
 }
 
-/** Lightweight backup discovery if Nasdaq movers proxy fails. */
+/** Backup + breadth: Yahoo predefined day_gainers (up to 100). */
 async function fetchYahooDayGainerSymbols(): Promise<Seed[]> {
   const data = (await fetchViaProxy(
-    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=50&scrIds=day_gainers&formatted=false",
+    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=100&scrIds=day_gainers&formatted=false",
     7000,
   )) as {
-    finance?: { result?: Array<{ quotes?: Array<{ symbol?: string; shortName?: string; longName?: string }> }> };
+    finance?: {
+      result?: Array<{
+        quotes?: Array<{
+          symbol?: string;
+          shortName?: string;
+          longName?: string;
+          regularMarketChangePercent?: number;
+        }>;
+      }>;
+    };
   };
   const quotes = data?.finance?.result?.[0]?.quotes || [];
   return quotes
@@ -131,29 +151,92 @@ async function fetchYahooDayGainerSymbols(): Promise<Seed[]> {
         .replace("/", "-")
         .toUpperCase(),
       name: q.shortName || q.longName || q.symbol || "",
+      priority: Number(q.regularMarketChangePercent) || 0,
     }))
     .filter((s) => s.symbol && !isJunk(s.symbol, s.name));
 }
 
+/**
+ * Broad US screener for symbols beyond Most Advanced's ~20-name cap.
+ * pctchange is used ONLY to prioritize which symbols to quote — never displayed.
+ */
+async function fetchNasdaqDownloadCandidates(): Promise<Seed[]> {
+  const data = (await fetchViaProxy(
+    "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true",
+    14000,
+  )) as {
+    data?: { rows?: Array<Record<string, string>> };
+  };
+  const rows = data?.data?.rows || [];
+  const seeds: Seed[] = [];
+  for (const r of rows) {
+    const symbol = String(r.symbol || "")
+      .replace("/", "-")
+      .toUpperCase();
+    const name = r.name || symbol;
+    if (!symbol || isJunk(symbol, name)) continue;
+    const pct = parseMoney(r.pctchange);
+    if (!(pct > 0)) continue;
+    seeds.push({ symbol, name, priority: pct });
+  }
+  seeds.sort((a, b) => b.priority - a.priority);
+  return seeds.slice(0, MAX_QUOTE_SYMBOLS);
+}
+
+/** Discovery-only candidate pool (not painted as LIVE %). */
+let broadCandidates: Seed[] = [];
+let broadCandidatesAt = 0;
+
+async function refreshBroadCandidatesIfNeeded(): Promise<void> {
+  const stale = Date.now() - broadCandidatesAt > CANDIDATE_REFRESH_MS;
+  if (!stale && broadCandidates.length >= FEED_LIMIT) return;
+  try {
+    const next = await fetchNasdaqDownloadCandidates();
+    if (next.length) {
+      broadCandidates = next;
+      broadCandidatesAt = Date.now();
+    }
+  } catch {
+    /* keep prior discovery candidates; quotes stay live */
+  }
+}
+
 async function discoverSymbols(): Promise<Seed[]> {
-  // Prefer Most Advanced (includes YXT-style runners). Retry once before backup.
+  const bySym = new Map<string, Seed>();
+
+  const merge = (seeds: Seed[]) => {
+    for (const s of seeds) {
+      const prev = bySym.get(s.symbol);
+      if (!prev || s.priority > prev.priority) bySym.set(s.symbol, s);
+    }
+  };
+
+  // Hot discovery every poll (Most Advanced ≈ 20 names).
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const advanced = await fetchMostAdvanced();
-      if (advanced.length) return advanced.slice(0, 40);
+      if (advanced.length) {
+        merge(advanced);
+        break;
+      }
     } catch {
       if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
     }
   }
 
   try {
-    const yahoo = await fetchYahooDayGainerSymbols();
-    if (yahoo.length) return yahoo.slice(0, 40);
+    merge(await fetchYahooDayGainerSymbols());
   } catch {
-    /* fall through */
+    /* optional breadth */
   }
 
-  throw new Error("Live discovery returned no US gainers");
+  // Occasional full-screener symbol list so we can fill top 50 beyond Most Advanced.
+  await refreshBroadCandidatesIfNeeded();
+  merge(broadCandidates);
+
+  const seeds = [...bySym.values()].sort((a, b) => b.priority - a.priority);
+  if (!seeds.length) throw new Error("Live discovery returned no US gainers");
+  return seeds.slice(0, MAX_QUOTE_SYMBOLS);
 }
 
 type SparkQuote = {
@@ -167,8 +250,8 @@ type SparkQuote = {
   changePct: number;
 };
 
-async function fetchYahooSpark(symbols: string[]): Promise<Map<string, SparkQuote>> {
-  const uniq = [...new Set(symbols)].filter(Boolean).slice(0, 30);
+async function fetchYahooSparkBatch(symbols: string[]): Promise<Map<string, SparkQuote>> {
+  const uniq = [...new Set(symbols)].filter(Boolean);
   if (!uniq.length) return new Map();
 
   const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${encodeURIComponent(uniq.join(","))}&range=1d&interval=1m`;
@@ -216,6 +299,18 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, SparkQuot
       changePct,
     });
   }
+  return map;
+}
+
+async function fetchYahooSpark(symbols: string[]): Promise<Map<string, SparkQuote>> {
+  const uniq = [...new Set(symbols)].filter(Boolean).slice(0, MAX_QUOTE_SYMBOLS);
+  const map = new Map<string, SparkQuote>();
+  for (let i = 0; i < uniq.length; i += SPARK_BATCH) {
+    const chunk = uniq.slice(i, i + SPARK_BATCH);
+    const part = await fetchYahooSparkBatch(chunk);
+    for (const [k, v] of part) map.set(k, v);
+  }
+  if (!map.size) throw new Error("Live Yahoo spark failed");
   return map;
 }
 

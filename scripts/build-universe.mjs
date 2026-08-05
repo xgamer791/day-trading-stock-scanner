@@ -212,7 +212,7 @@ async function main() {
   const coverage = {
     updatedAt: new Date().toISOString(),
     description:
-      "Top Gainers scanner screens common stocks across official US exchange directories and major index membership lists. Live ranking scrapes the full US composite market; feeds show the top 20 % gainers only.",
+      "Top Gainers scanner screens common stocks across official US exchange directories and major index membership lists. Live ranking scrapes the full US composite market; feeds show the top 50 % gainers only.",
     exchanges: Object.fromEntries(
       Object.entries(byExchange).map(([k, v]) => [k, { symbolCount: new Set(v).size }]),
     ),
@@ -221,7 +221,7 @@ async function main() {
     ),
     totals: {
       uniqueSymbols: symbols.length,
-      feedLimit: 20,
+      feedLimit: 50,
       ranking: "top-percent-gainers-full-us-market",
     },
     marketsScreened: [
