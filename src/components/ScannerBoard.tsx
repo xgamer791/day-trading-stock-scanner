@@ -2,36 +2,54 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
-import { getDemoScanner } from "@/lib/demo";
 import type { ScannerPayload } from "@/lib/types";
+
+function liveDataUrl(): string {
+  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
+  return `${base}/data/live.json?t=${Date.now()}`;
+}
 
 async function loadScanner(): Promise<ScannerPayload> {
   const key = process.env.NEXT_PUBLIC_POLYGON_API_KEY;
-  if (!key) return getDemoScanner();
-
-  try {
-    const [newsRes, gainersRes] = await Promise.all([
-      fetch(
-        `https://api.polygon.io/v2/reference/news?limit=40&order=desc&sort=published_utc&apiKey=${key}`,
-      ),
-      fetch(
-        `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/gainers?apiKey=${key}`,
-      ),
-    ]);
-
-    if (!newsRes.ok || !gainersRes.ok) return getDemoScanner();
-
-    // Fall back to demo shaping if live parse fails — keep UI alive
-    const { buildFromPolygon } = await import("@/lib/clientPolygon");
-    return buildFromPolygon(await newsRes.json(), await gainersRes.json());
-  } catch {
-    return getDemoScanner();
+  if (key) {
+    try {
+      const [newsRes, gainersRes] = await Promise.all([
+        fetch(
+          `https://api.polygon.io/v2/reference/news?limit=40&order=desc&sort=published_utc&apiKey=${key}`,
+        ),
+        fetch(
+          `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/gainers?apiKey=${key}`,
+        ),
+      ]);
+      if (newsRes.ok && gainersRes.ok) {
+        const { buildFromPolygon } = await import("@/lib/clientPolygon");
+        return buildFromPolygon(await newsRes.json(), await gainersRes.json());
+      }
+    } catch {
+      /* fall through to Yahoo live.json */
+    }
   }
+
+  const res = await fetch(liveDataUrl(), { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`Live data unavailable (${res.status})`);
+  }
+  return (await res.json()) as ScannerPayload;
 }
 
+const EMPTY: ScannerPayload = {
+  session: "closed",
+  updatedAt: new Date(0).toISOString(),
+  source: "yahoo",
+  news: [],
+  premarket: [],
+  gainers: [],
+};
+
 export function ScannerBoard() {
-  const [data, setData] = useState<ScannerPayload>(() => getDemoScanner());
+  const [data, setData] = useState<ScannerPayload>(EMPTY);
   const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("pre");
 
   useEffect(() => {
@@ -43,13 +61,16 @@ export function ScannerBoard() {
         if (cancelled) return;
         setData(payload);
         setConnected(true);
-      } catch {
-        if (!cancelled) setConnected(false);
+        setError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setConnected(false);
+        setError(err instanceof Error ? err.message : "Failed to load live data");
       }
     };
 
     tick();
-    const id = setInterval(tick, 2500);
+    const id = setInterval(tick, 15_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -65,6 +86,9 @@ export function ScannerBoard() {
         timeZone: "America/New_York",
       })
     : "—";
+
+  const sourceLabel =
+    data.source === "polygon" ? "POLYGON" : data.source === "yahoo" ? "YAHOO LIVE" : "DEMO";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -129,13 +153,27 @@ export function ScannerBoard() {
             style={{
               border: "1px solid var(--border-strong)",
               padding: "4px 8px",
-              color: data.source === "polygon" ? "var(--hod)" : "var(--amber)",
+              color: data.source === "demo" ? "var(--amber)" : "var(--hod)",
             }}
           >
-            {data.source === "polygon" ? "POLYGON" : "DEMO DATA"}
+            {sourceLabel}
           </span>
         </div>
       </div>
+
+      {error && (
+        <div
+          style={{
+            padding: "10px 20px",
+            background: "var(--red-dim)",
+            color: "var(--red)",
+            fontSize: 13,
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          {error}
+        </div>
+      )}
 
       <div className="mobile-tabs">
         {(
@@ -188,10 +226,10 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Premarket HOD Gainers"
-            subtitle="Premarket / early session runners peaking at high of day"
+            subtitle="Live Yahoo premarket / early runners — HOD peaks ranked first"
             count={data.premarket.length}
           />
-          <StockTable rows={data.premarket} emptyText="No premarket HOD peaks right now" />
+          <StockTable rows={data.premarket} emptyText="No premarket gainers right now" />
         </section>
 
         <section
@@ -200,10 +238,10 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Market Top Gainers"
-            subtitle="Regular session top gainers trading at or near HOD"
+            subtitle="Live Yahoo day gainers — stocks at/near high of day ranked first"
             count={data.gainers.length}
           />
-          <StockTable rows={data.gainers} emptyText="No HOD market gainers right now" />
+          <StockTable rows={data.gainers} emptyText="No market gainers right now" />
         </section>
       </main>
     </div>

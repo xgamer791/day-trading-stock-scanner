@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "npm run fetch:live && next dev --turbopack",
+    "fetch:live": "node scripts/fetch-live.mjs",
+    "prebuild": "node scripts/fetch-live.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

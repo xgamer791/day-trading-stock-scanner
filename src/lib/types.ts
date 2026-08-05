@@ -30,7 +30,7 @@ export type NewsItem = {
 export type ScannerPayload = {
   session: MarketSession;
   updatedAt: string;
-  source: "polygon" | "demo";
+  source: "yahoo" | "polygon" | "demo";
   news: NewsItem[];
   premarket: StockMover[];
   gainers: StockMover[];

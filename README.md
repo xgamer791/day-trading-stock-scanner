@@ -19,7 +19,7 @@ Only stocks within **0.35% of day high** and green on the day are listed.
 - Next.js (App Router) + TypeScript
 - Polygon.io snapshots + news (live)
 - Server-Sent Events stream (~2.5s refresh)
-- Demo mode when no API key is set
+- Live Yahoo Finance gainers + news (refreshed every 5 minutes via GitHub Actions). Optional Polygon key for exchange-grade snapshots.
 
 ## Live
 
