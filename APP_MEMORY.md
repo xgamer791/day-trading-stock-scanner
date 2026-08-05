@@ -52,10 +52,9 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 - **Never overlay** a secondary Nasdaq-% feed on top of an accurate last/prevClose feed.
 
 **Required live path (client):**
-1. Discover via live **Nasdaq Most Advanced** + **Yahoo day_gainers** each poll. Refresh broad Nasdaq download candidates ~every 45s for breadth beyond Most Advanced’s ~20-name cap. Do **not** hit the 10k full screener every 3s — that rate-limits CORS proxies and dies ~20s in. Candidate lists are for symbol discovery only — never paint their % as LIVE.
-2. Quote via **Yahoo spark batches** (`v7/finance/spark`) — last + previousClose from same meta
-3. Rank by `(last − previousClose) / previousClose`; show **top 50**
-4. Poll ~every **3s**; on failure show RECONNECTING (not LIVE). Never fall back to `live.json`.
+1. Discover via live **Nasdaq Most Advanced** each poll (runners). Primary quotes from **Yahoo day_gainers** (`regularMarketPrice` + `regularMarketPreviousClose` on the same payload). Spark only fills Most Advanced symbols missing from day_gainers (≤30). Do **not** multi-batch spark 100+ symbols or hit the 10k full screener on the hot path — that rate-limits CORS proxies (“Live Yahoo spark failed”).
+2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**
+3. Poll ~every **3s**; on failure show RECONNECTING (not LIVE). Never fall back to `live.json`.
 
 ---
 

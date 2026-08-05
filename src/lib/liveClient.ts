@@ -2,22 +2,18 @@
  * LIVE-ONLY client feed (APP_MEMORY.md).
  *
  * Hot path every ~3s (keeps CORS proxies alive):
- *  1) Discover candidates: Nasdaq Most Advanced + Yahoo day_gainers
- *     (+ occasional Nasdaq download for breadth beyond Most Advanced's ~20)
- *  2) Yahoo spark batches (last + prevClose from same meta)
- *  3) Rank by same-quote % — top 50
+ *  1) Nasdaq Most Advanced (small discovery — Realtime runners)
+ *  2) Yahoo day_gainers (up to 100) — last + prevClose from SAME payload
+ *  3) Yahoo spark ONLY for Most Advanced symbols missing from day_gainers
+ *  4) Rank by same-quote % — top 50
  *
- * Full 10k screener is NOT polled every tick (rate-limits proxies ~20s in).
+ * Do NOT multi-batch spark 100+ symbols or download the 10k screener every tick —
+ * that rate-limits CORS proxies and surfaces "Live Yahoo spark failed".
  * NEVER reads live.json for mover rows.
- * Discovery candidate list is NOT painted as LIVE % — only used to choose symbols to quote.
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
-const SPARK_BATCH = 40;
-const MAX_QUOTE_SYMBOLS = 120;
-/** How often to refresh broad screener symbol candidates (discovery only). */
-const CANDIDATE_REFRESH_MS = 45_000;
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
@@ -101,145 +97,9 @@ function sessionNow(): ScannerPayload["session"] {
   return "closed";
 }
 
-type Seed = { symbol: string; name: string; priority: number };
+type Seed = { symbol: string; name: string };
 
-async function fetchMostAdvanced(): Promise<Seed[]> {
-  const data = (await fetchViaProxy(
-    "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50",
-    7000,
-  )) as {
-    data?: { STOCKS?: { MostAdvanced?: { table?: { rows?: Array<Record<string, string>> } } } };
-  };
-  const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
-  const out: Seed[] = [];
-  let i = 0;
-  for (const r of rows) {
-    if (isJunk(r.symbol, r.name)) continue;
-    if (!(parseMoney(r.change) > 0)) continue;
-    out.push({
-      symbol: String(r.symbol).replace("/", "-").toUpperCase(),
-      name: r.name || r.symbol,
-      // Highest priority — these are the live runners Most Advanced surfaces.
-      priority: 1_000_000 - i,
-    });
-    i += 1;
-  }
-  return out;
-}
-
-/** Backup + breadth: Yahoo predefined day_gainers (up to 100). */
-async function fetchYahooDayGainerSymbols(): Promise<Seed[]> {
-  const data = (await fetchViaProxy(
-    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=100&scrIds=day_gainers&formatted=false",
-    7000,
-  )) as {
-    finance?: {
-      result?: Array<{
-        quotes?: Array<{
-          symbol?: string;
-          shortName?: string;
-          longName?: string;
-          regularMarketChangePercent?: number;
-        }>;
-      }>;
-    };
-  };
-  const quotes = data?.finance?.result?.[0]?.quotes || [];
-  return quotes
-    .map((q) => ({
-      symbol: String(q.symbol || "")
-        .replace("/", "-")
-        .toUpperCase(),
-      name: q.shortName || q.longName || q.symbol || "",
-      priority: Number(q.regularMarketChangePercent) || 0,
-    }))
-    .filter((s) => s.symbol && !isJunk(s.symbol, s.name));
-}
-
-/**
- * Broad US screener for symbols beyond Most Advanced's ~20-name cap.
- * pctchange is used ONLY to prioritize which symbols to quote — never displayed.
- */
-async function fetchNasdaqDownloadCandidates(): Promise<Seed[]> {
-  const data = (await fetchViaProxy(
-    "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true",
-    14000,
-  )) as {
-    data?: { rows?: Array<Record<string, string>> };
-  };
-  const rows = data?.data?.rows || [];
-  const seeds: Seed[] = [];
-  for (const r of rows) {
-    const symbol = String(r.symbol || "")
-      .replace("/", "-")
-      .toUpperCase();
-    const name = r.name || symbol;
-    if (!symbol || isJunk(symbol, name)) continue;
-    const pct = parseMoney(r.pctchange);
-    if (!(pct > 0)) continue;
-    seeds.push({ symbol, name, priority: pct });
-  }
-  seeds.sort((a, b) => b.priority - a.priority);
-  return seeds.slice(0, MAX_QUOTE_SYMBOLS);
-}
-
-/** Discovery-only candidate pool (not painted as LIVE %). */
-let broadCandidates: Seed[] = [];
-let broadCandidatesAt = 0;
-
-async function refreshBroadCandidatesIfNeeded(): Promise<void> {
-  const stale = Date.now() - broadCandidatesAt > CANDIDATE_REFRESH_MS;
-  if (!stale && broadCandidates.length >= FEED_LIMIT) return;
-  try {
-    const next = await fetchNasdaqDownloadCandidates();
-    if (next.length) {
-      broadCandidates = next;
-      broadCandidatesAt = Date.now();
-    }
-  } catch {
-    /* keep prior discovery candidates; quotes stay live */
-  }
-}
-
-async function discoverSymbols(): Promise<Seed[]> {
-  const bySym = new Map<string, Seed>();
-
-  const merge = (seeds: Seed[]) => {
-    for (const s of seeds) {
-      const prev = bySym.get(s.symbol);
-      if (!prev || s.priority > prev.priority) bySym.set(s.symbol, s);
-    }
-  };
-
-  // Hot discovery every poll (Most Advanced ≈ 20 names).
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const advanced = await fetchMostAdvanced();
-      if (advanced.length) {
-        merge(advanced);
-        break;
-      }
-    } catch {
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
-    }
-  }
-
-  try {
-    merge(await fetchYahooDayGainerSymbols());
-  } catch {
-    /* optional breadth */
-  }
-
-  // Occasional full-screener symbol list so we can fill top 50 beyond Most Advanced.
-  await refreshBroadCandidatesIfNeeded();
-  merge(broadCandidates);
-
-  const seeds = [...bySym.values()].sort((a, b) => b.priority - a.priority);
-  if (!seeds.length) throw new Error("Live discovery returned no US gainers");
-  return seeds.slice(0, MAX_QUOTE_SYMBOLS);
-}
-
-type SparkQuote = {
+type LiveQuote = {
   symbol: string;
   name: string;
   last: number;
@@ -250,8 +110,87 @@ type SparkQuote = {
   changePct: number;
 };
 
-async function fetchYahooSparkBatch(symbols: string[]): Promise<Map<string, SparkQuote>> {
-  const uniq = [...new Set(symbols)].filter(Boolean);
+function quoteFromLastPrev(
+  symbol: string,
+  name: string,
+  last: number,
+  prevClose: number,
+  dayHigh: number,
+  dayLow: number,
+  volume: number,
+): LiveQuote | null {
+  if (!(last > 0) || !(prevClose > 0)) return null;
+  const changePct = ((last - prevClose) / prevClose) * 100;
+  if (!(changePct > 0)) return null;
+  return {
+    symbol,
+    name: name || symbol,
+    last,
+    prevClose,
+    dayHigh: Math.max(dayHigh || last, last),
+    dayLow: dayLow || last,
+    volume: volume || 0,
+    changePct,
+  };
+}
+
+async function fetchMostAdvanced(): Promise<Seed[]> {
+  const data = (await fetchViaProxy(
+    "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50",
+    7000,
+  )) as {
+    data?: { STOCKS?: { MostAdvanced?: { table?: { rows?: Array<Record<string, string>> } } } };
+  };
+  const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
+  const out: Seed[] = [];
+  for (const r of rows) {
+    if (isJunk(r.symbol, r.name)) continue;
+    if (!(parseMoney(r.change) > 0)) continue;
+    out.push({
+      symbol: String(r.symbol).replace("/", "-").toUpperCase(),
+      name: r.name || r.symbol,
+    });
+  }
+  return out;
+}
+
+/**
+ * Primary quote source: Yahoo day_gainers includes last + previousClose
+ * on the same payload — %Chg matches TradingView/Realtime math without spark.
+ */
+async function fetchYahooDayGainerQuotes(): Promise<Map<string, LiveQuote>> {
+  const data = (await fetchViaProxy(
+    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=100&scrIds=day_gainers&formatted=false",
+    8000,
+  )) as {
+    finance?: {
+      result?: Array<{
+        quotes?: Array<Record<string, unknown>>;
+      }>;
+    };
+  };
+  const quotes = data?.finance?.result?.[0]?.quotes || [];
+  const map = new Map<string, LiveQuote>();
+  for (const q of quotes) {
+    const symbol = String(q.symbol || "")
+      .replace("/", "-")
+      .toUpperCase();
+    const name = String(q.shortName || q.longName || symbol);
+    if (!symbol || isJunk(symbol, name)) continue;
+    const last = Number(q.regularMarketPrice) || 0;
+    const prevClose = Number(q.regularMarketPreviousClose) || 0;
+    const dayHigh = Number(q.regularMarketDayHigh) || last;
+    const dayLow = Number(q.regularMarketDayLow) || last;
+    const volume = Number(q.regularMarketVolume) || 0;
+    const row = quoteFromLastPrev(symbol, name, last, prevClose, dayHigh, dayLow, volume);
+    if (row) map.set(symbol, row);
+  }
+  return map;
+}
+
+/** Small spark fill-in for Most Advanced runners Yahoo day_gainers missed. */
+async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote>> {
+  const uniq = [...new Set(symbols)].filter(Boolean).slice(0, 30);
   if (!uniq.length) return new Map();
 
   const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${encodeURIComponent(uniq.join(","))}&range=1d&interval=1m`;
@@ -263,8 +202,8 @@ async function fetchYahooSparkBatch(symbols: string[]): Promise<Map<string, Spar
       }>;
     };
   };
-  let data: SparkPayload | null = null;
 
+  let data: SparkPayload | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       data = (await fetchViaProxy(url, 8000)) as SparkPayload;
@@ -273,48 +212,33 @@ async function fetchYahooSparkBatch(symbols: string[]): Promise<Map<string, Spar
       if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
     }
   }
-  if (!data) throw new Error("Live Yahoo spark failed");
+  if (!data) return new Map();
 
-  const map = new Map<string, SparkQuote>();
+  const map = new Map<string, LiveQuote>();
   for (const item of data.spark?.result || []) {
     const meta = item.response?.[0]?.meta;
     if (!meta) continue;
     const symbol = String(item.symbol || meta.symbol || "").toUpperCase();
     const last = Number(meta.regularMarketPrice) || 0;
     const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
-    if (!(last > 0) || !(prevClose > 0)) continue;
     const dayHigh = Number(meta.regularMarketDayHigh) || last;
     const dayLow = Number(meta.regularMarketDayLow) || last;
     const volume = Number(meta.regularMarketVolume) || 0;
-    const changePct = ((last - prevClose) / prevClose) * 100;
-    if (!(changePct > 0)) continue;
-    map.set(symbol, {
+    const row = quoteFromLastPrev(
       symbol,
-      name: String(meta.shortName || meta.longName || symbol),
+      String(meta.shortName || meta.longName || symbol),
       last,
       prevClose,
-      dayHigh: Math.max(dayHigh, last),
+      dayHigh,
       dayLow,
       volume,
-      changePct,
-    });
+    );
+    if (row) map.set(symbol, row);
   }
   return map;
 }
 
-async function fetchYahooSpark(symbols: string[]): Promise<Map<string, SparkQuote>> {
-  const uniq = [...new Set(symbols)].filter(Boolean).slice(0, MAX_QUOTE_SYMBOLS);
-  const map = new Map<string, SparkQuote>();
-  for (let i = 0; i < uniq.length; i += SPARK_BATCH) {
-    const chunk = uniq.slice(i, i + SPARK_BATCH);
-    const part = await fetchYahooSparkBatch(chunk);
-    for (const [k, v] of part) map.set(k, v);
-  }
-  if (!map.size) throw new Error("Live Yahoo spark failed");
-  return map;
-}
-
-function toMover(q: SparkQuote): StockMover {
+function toMover(q: LiveQuote): StockMover {
   const hodDistancePct = q.dayHigh > 0 ? ((q.dayHigh - q.last) / q.dayHigh) * 100 : 0;
   return {
     symbol: q.symbol,
@@ -337,12 +261,44 @@ function toMover(q: SparkQuote): StockMover {
 /** Live scan — no live.json. */
 export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   const session = sessionNow();
-  const seeds = await discoverSymbols();
-  const quotes = await fetchYahooSpark(seeds.map((s) => s.symbol));
 
-  for (const s of seeds) {
+  // Prefer day_gainers quotes (one request, up to 100 same-quote rows).
+  // Most Advanced in parallel for runner discovery only.
+  let advanced: Seed[] = [];
+  let quotes = new Map<string, LiveQuote>();
+  let yahooErr: Error | null = null;
+  let advancedErr: Error | null = null;
+
+  const [advRes, yahooRes] = await Promise.allSettled([
+    fetchMostAdvanced(),
+    fetchYahooDayGainerQuotes(),
+  ]);
+
+  if (advRes.status === "fulfilled") advanced = advRes.value;
+  else advancedErr = advRes.reason instanceof Error ? advRes.reason : new Error(String(advRes.reason));
+
+  if (yahooRes.status === "fulfilled") quotes = yahooRes.value;
+  else yahooErr = yahooRes.reason instanceof Error ? yahooRes.reason : new Error(String(yahooRes.reason));
+
+  // Fill runners Yahoo's day_gainers list omitted (small spark ≤30 symbols).
+  const missing = advanced.map((s) => s.symbol).filter((s) => !quotes.has(s));
+  if (missing.length) {
+    const spark = await fetchYahooSpark(missing);
+    for (const [sym, q] of spark) quotes.set(sym, q);
+  }
+
+  // If day_gainers failed entirely, spark Most Advanced so the board still lives.
+  if (!quotes.size && advanced.length) {
+    quotes = await fetchYahooSpark(advanced.map((s) => s.symbol));
+  }
+
+  for (const s of advanced) {
     const q = quotes.get(s.symbol);
     if (q && (!q.name || q.name === q.symbol) && s.name) q.name = s.name;
+  }
+
+  if (!quotes.size) {
+    throw yahooErr || advancedErr || new Error("Live Yahoo spark failed");
   }
 
   const movers = [...quotes.values()]
