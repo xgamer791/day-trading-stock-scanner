@@ -1,6 +1,6 @@
 {
   "session": "premarket",
-  "updatedAt": "2026-08-05T13:14:08.084Z",
+  "updatedAt": "2026-08-05T13:16:06.928Z",
   "source": "yahoo",
   "news": [
     {
@@ -90,30 +90,30 @@
     {
       "symbol": "HL",
       "name": "Hecla Mining Company",
-      "price": 16.43,
-      "changePct": 6.549937,
-      "change": 1.0100002,
+      "price": 16.48,
+      "changePct": 6.874186,
+      "change": 1.0599995,
       "volume": 31626081,
-      "dayHigh": 16.43,
+      "dayHigh": 16.48,
       "dayLow": 15,
       "prevClose": 14.43,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "CDE",
       "name": "Coeur Mining",
-      "price": 17.0235,
-      "changePct": 4.953768,
-      "change": 0.8035011,
+      "price": 17.02,
+      "changePct": 4.93219,
+      "change": 0.80000114,
       "volume": 30856484,
-      "dayHigh": 17.0235,
+      "dayHigh": 17.02,
       "dayLow": 16.05,
       "prevClose": 15.56,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "GENI",
@@ -127,21 +127,35 @@
       "prevClose": 7.07,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "AYA",
       "name": "Aya Gold & Silver",
-      "price": 23.936,
-      "changePct": 4.5240226,
-      "change": 1.0360012,
+      "price": 23.9299,
+      "changePct": 4.4973783,
+      "change": 1.0298996,
       "volume": 1541952,
-      "dayHigh": 23.936,
+      "dayHigh": 23.9299,
       "dayLow": 20.54,
       "prevClose": 20.34,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
+    },
+    {
+      "symbol": "INOD",
+      "name": "Innodata",
+      "price": 72.98,
+      "changePct": 3.945313,
+      "change": 2.7700043,
+      "volume": 1911440,
+      "dayHigh": 72.98,
+      "dayLow": 66.2479,
+      "prevClose": 63.26,
+      "hodDistancePct": 0,
+      "atHod": true,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "CMG",
@@ -155,21 +169,7 @@
       "prevClose": 37.46,
       "hodDistancePct": 6.9746246844692354,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
-    },
-    {
-      "symbol": "INOD",
-      "name": "Innodata",
-      "price": 72,
-      "changePct": 2.5494957,
-      "change": 1.7900009,
-      "volume": 1911440,
-      "dayHigh": 72,
-      "dayLow": 66.2479,
-      "prevClose": 63.26,
-      "hodDistancePct": 0,
-      "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ADEA",
@@ -183,7 +183,7 @@
       "prevClose": 27.79,
       "hodDistancePct": 0.6211180124223691,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "TGB",
@@ -197,21 +197,21 @@
       "prevClose": 6.97,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "SYRE",
       "name": "Spyre Therapeutics",
-      "price": 107.404,
-      "changePct": 2.3480053,
-      "change": 2.463997,
+      "price": 107.13,
+      "changePct": 2.086902,
+      "change": 2.1899948,
       "volume": 818354,
-      "dayHigh": 107.404,
+      "dayHigh": 107.13,
       "dayLow": 97.03,
       "prevClose": 94.93,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "EWTX",
@@ -225,105 +225,133 @@
       "prevClose": 38.38,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
+    },
+    {
+      "symbol": "LFTO",
+      "name": "Liftoff Mobile",
+      "price": 26,
+      "changePct": 1.9208144,
+      "change": 0.48999977,
+      "volume": 1037514,
+      "dayHigh": 26,
+      "dayLow": 22.51,
+      "prevClose": 22.44,
+      "hodDistancePct": 0,
+      "atHod": true,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "NFLX",
       "name": "Netflix",
-      "price": 74.85,
-      "changePct": 1.739838,
-      "change": 1.2799988,
+      "price": 74.87,
+      "changePct": 1.7670288,
+      "change": 1.300003,
       "volume": 42742380,
-      "dayHigh": 74.85,
+      "dayHigh": 74.87,
       "dayLow": 72.3,
       "prevClose": 73.33,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
-    },
-    {
-      "symbol": "ONDS",
-      "name": "Ondas",
-      "price": 8.99,
-      "changePct": 1.46727,
-      "change": 0.13000011,
-      "volume": 72038072,
-      "dayHigh": 9.09,
-      "dayLow": 8.59,
-      "prevClose": 8.37,
-      "hodDistancePct": 1.1001100110010962,
-      "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
-    },
-    {
-      "symbol": "NU",
-      "name": "Nu",
-      "price": 14.5296,
-      "changePct": 1.3928837,
-      "change": 0.19960022,
-      "volume": 46347569,
-      "dayHigh": 14.74,
-      "dayLow": 14.26,
-      "prevClose": 14.44,
-      "hodDistancePct": 1.4274084124830388,
-      "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
-    },
-    {
-      "symbol": "BETA",
-      "name": "BETA",
-      "price": 22.25,
-      "changePct": 1.3653562,
-      "change": 0.29969978,
-      "volume": 3141093,
-      "dayHigh": 22.42,
-      "dayLow": 19.9,
-      "prevClose": 19.39,
-      "hodDistancePct": 0.7582515611061628,
-      "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "PATH",
       "name": "UiPath",
-      "price": 14.27,
-      "changePct": 1.3026677,
-      "change": 0.18350029,
+      "price": 14.294,
+      "changePct": 1.4730381,
+      "change": 0.2074995,
       "volume": 57978435,
-      "dayHigh": 14.27,
+      "dayHigh": 14.294,
       "dayLow": 12.9,
       "prevClose": 13.05,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
-      "symbol": "OWL",
-      "name": "Blue Owl Capital",
-      "price": 11.71,
-      "changePct": 1.2100289,
-      "change": 0.14000034,
-      "volume": 29253460,
-      "dayHigh": 11.71,
-      "dayLow": 11.12,
-      "prevClose": 11.16,
-      "hodDistancePct": 0,
-      "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "symbol": "NU",
+      "name": "Nu",
+      "price": 14.536,
+      "changePct": 1.4375459,
+      "change": 0.20600033,
+      "volume": 46347569,
+      "dayHigh": 14.74,
+      "dayLow": 14.26,
+      "prevClose": 14.44,
+      "hodDistancePct": 1.3839891451831792,
+      "atHod": false,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
+    },
+    {
+      "symbol": "ONDS",
+      "name": "Ondas",
+      "price": 8.98,
+      "changePct": 1.3544005,
+      "change": 0.119999886,
+      "volume": 72038072,
+      "dayHigh": 9.09,
+      "dayLow": 8.59,
+      "prevClose": 8.37,
+      "hodDistancePct": 1.2101210121012038,
+      "atHod": false,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
+    },
+    {
+      "symbol": "BETA",
+      "name": "BETA",
+      "price": 22.2312,
+      "changePct": 1.2797048,
+      "change": 0.28089905,
+      "volume": 3141093,
+      "dayHigh": 22.42,
+      "dayLow": 19.9,
+      "prevClose": 19.39,
+      "hodDistancePct": 0.842105263157897,
+      "atHod": false,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "NVO",
       "name": "Novo Nordisk A/S",
-      "price": 44.7751,
-      "changePct": 1.1574107,
-      "change": 0.5123024,
+      "price": 44.81,
+      "changePct": 1.2362596,
+      "change": 0.54720306,
       "volume": 45688713,
       "dayHigh": 49.15,
       "dayLow": 43.68,
       "prevClose": 47.09,
-      "hodDistancePct": 8.901119023397754,
+      "hodDistancePct": 8.830111902339768,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
+    },
+    {
+      "symbol": "QXO",
+      "name": "QXO",
+      "price": 15.531,
+      "changePct": 1.1791514,
+      "change": 0.18099976,
+      "volume": 38536354,
+      "dayHigh": 15.531,
+      "dayLow": 14.47,
+      "prevClose": 14.09,
+      "hodDistancePct": 0,
+      "atHod": true,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
+    },
+    {
+      "symbol": "CIFR",
+      "name": "Cipher Digital",
+      "price": 20.62,
+      "changePct": 1.1776334,
+      "change": 0.24000168,
+      "volume": 58994705,
+      "dayHigh": 22.39,
+      "dayLow": 20.2,
+      "prevClose": 24.16,
+      "hodDistancePct": 7.905314872711029,
+      "atHod": false,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ABEV",
@@ -337,7 +365,21 @@
       "prevClose": 3.05,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
+    },
+    {
+      "symbol": "OWL",
+      "name": "Blue Owl Capital",
+      "price": 11.7003,
+      "changePct": 1.1261929,
+      "change": 0.13030052,
+      "volume": 29253460,
+      "dayHigh": 11.7003,
+      "dayLow": 11.12,
+      "prevClose": 11.16,
+      "hodDistancePct": 0,
+      "atHod": true,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "WIX",
@@ -351,21 +393,21 @@
       "prevClose": 56.84,
       "hodDistancePct": 1.1819379391100564,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
-      "symbol": "CIFR",
-      "name": "Cipher Digital",
-      "price": 20.6022,
-      "changePct": 1.0902866,
-      "change": 0.2222004,
-      "volume": 58994705,
-      "dayHigh": 22.39,
-      "dayLow": 20.2,
-      "prevClose": 24.16,
-      "hodDistancePct": 7.984814649397055,
-      "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "symbol": "WMT",
+      "name": "Walmart",
+      "price": 112.75,
+      "changePct": 1.075748,
+      "change": 1.199997,
+      "volume": 29373375,
+      "dayHigh": 112.75,
+      "dayLow": 108.56,
+      "prevClose": 110.71,
+      "hodDistancePct": 0,
+      "atHod": true,
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     }
   ],
   "gainers": [
@@ -381,7 +423,7 @@
       "prevClose": 89.31,
       "hodDistancePct": 1.880732006255026,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "PLTR",
@@ -395,7 +437,7 @@
       "prevClose": 125.65,
       "hodDistancePct": 1.1245516989848607,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "PAY",
@@ -409,7 +451,7 @@
       "prevClose": 34.52,
       "hodDistancePct": 1.5669830059589513,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ZBRA",
@@ -423,7 +465,7 @@
       "prevClose": 291.64,
       "hodDistancePct": 0.259606803861661,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "UFPT",
@@ -437,7 +479,7 @@
       "prevClose": 267.53,
       "hodDistancePct": 1.1411109962947135,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "IT",
@@ -451,7 +493,7 @@
       "prevClose": 151.53,
       "hodDistancePct": 3.166288796810266,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "AEHR",
@@ -465,7 +507,7 @@
       "prevClose": 91.71,
       "hodDistancePct": 0.9999999999999996,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "AAOI",
@@ -479,7 +521,7 @@
       "prevClose": 110.21,
       "hodDistancePct": 3.4050047699420376,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "PLPC",
@@ -493,7 +535,7 @@
       "prevClose": 358.15,
       "hodDistancePct": 0.5633802816901355,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "TDW",
@@ -507,7 +549,7 @@
       "prevClose": 71.48,
       "hodDistancePct": 1.16224465837052,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "WIX",
@@ -521,7 +563,7 @@
       "prevClose": 56.84,
       "hodDistancePct": 2.2540983606557266,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ARM",
@@ -535,7 +577,7 @@
       "prevClose": 239.06,
       "hodDistancePct": 0.949166544571278,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "EWTX",
@@ -549,7 +591,7 @@
       "prevClose": 38.38,
       "hodDistancePct": 1.4874394006170213,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "FN",
@@ -563,7 +605,7 @@
       "prevClose": 455.94,
       "hodDistancePct": 1.8338108882521624,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "DORM",
@@ -577,7 +619,7 @@
       "prevClose": 127.68,
       "hodDistancePct": 4.645161290322573,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ENTG",
@@ -591,7 +633,7 @@
       "prevClose": 125.2,
       "hodDistancePct": 0.4887450953397177,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "WLK",
@@ -605,7 +647,7 @@
       "prevClose": 69.89,
       "hodDistancePct": 0,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "AEIS",
@@ -619,7 +661,7 @@
       "prevClose": 296.38,
       "hodDistancePct": 0.8926886621282246,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "SNAP",
@@ -633,7 +675,7 @@
       "prevClose": 5.04,
       "hodDistancePct": 0.5154639175257775,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "GENI",
@@ -647,7 +689,7 @@
       "prevClose": 7.07,
       "hodDistancePct": 0.8588957055214758,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "WHR",
@@ -661,7 +703,7 @@
       "prevClose": 39.21,
       "hodDistancePct": 0.8003557136505102,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "LFTO",
@@ -675,7 +717,7 @@
       "prevClose": 22.44,
       "hodDistancePct": 1.7712745475548606,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "LIF",
@@ -689,7 +731,7 @@
       "prevClose": 56.31,
       "hodDistancePct": 0.10930668332293471,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "BETA",
@@ -703,7 +745,7 @@
       "prevClose": 19.39,
       "hodDistancePct": 2.096342551293499,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "MRVL",
@@ -717,7 +759,7 @@
       "prevClose": 193.775,
       "hodDistancePct": 1.8323078995823348,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ALAB",
@@ -731,7 +773,7 @@
       "prevClose": 321.05,
       "hodDistancePct": 1.680032621992662,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "OUST",
@@ -745,7 +787,7 @@
       "prevClose": 42.48,
       "hodDistancePct": 0.2294056308654837,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "AYA",
@@ -759,7 +801,7 @@
       "prevClose": 20.34,
       "hodDistancePct": 0.7798960138648168,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "COHR",
@@ -773,7 +815,7 @@
       "prevClose": 288.14,
       "hodDistancePct": 3.7549054584373867,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "TGB",
@@ -787,7 +829,7 @@
       "prevClose": 6.97,
       "hodDistancePct": 0.38167938931298023,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ADEA",
@@ -801,7 +843,7 @@
       "prevClose": 27.79,
       "hodDistancePct": 3.074534161490689,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "BRSL",
@@ -815,7 +857,7 @@
       "prevClose": 10.11,
       "hodDistancePct": 2.1645021645021645,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "INVX",
@@ -829,7 +871,7 @@
       "prevClose": 28.3,
       "hodDistancePct": 6.170275882527445,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "WU",
@@ -843,7 +885,7 @@
       "prevClose": 6.55,
       "hodDistancePct": 0.6118286879673802,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ATEX",
@@ -857,7 +899,7 @@
       "prevClose": 95.65,
       "hodDistancePct": 0.8946044171093169,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "INOD",
@@ -871,7 +913,7 @@
       "prevClose": 63.26,
       "hodDistancePct": 2.4590163934426372,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "HIMX",
@@ -885,7 +927,7 @@
       "prevClose": 12.78,
       "hodDistancePct": 0.908455625436763,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "INTC",
@@ -899,7 +941,7 @@
       "prevClose": 91,
       "hodDistancePct": 0.5226358838503616,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "ASTS",
@@ -913,7 +955,7 @@
       "prevClose": 63.52,
       "hodDistancePct": 1.346990318507077,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "SMCI",
@@ -927,7 +969,7 @@
       "prevClose": 28.64,
       "hodDistancePct": 0.47110552763818647,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "FORM",
@@ -941,7 +983,7 @@
       "prevClose": 108.8,
       "hodDistancePct": 1.0487353485502824,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "SYRE",
@@ -955,7 +997,7 @@
       "prevClose": 94.93,
       "hodDistancePct": 0.2945368171021399,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "BELFA",
@@ -969,7 +1011,7 @@
       "prevClose": 219.47,
       "hodDistancePct": 0.9841150702854718,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "PPLI",
@@ -983,7 +1025,7 @@
       "prevClose": 42.06,
       "hodDistancePct": 0.2149151085321329,
       "atHod": true,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "UMC",
@@ -997,7 +1039,7 @@
       "prevClose": 18.69,
       "hodDistancePct": 1.0551558752997716,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "TER",
@@ -1011,7 +1053,7 @@
       "prevClose": 365.8,
       "hodDistancePct": 1.5034657815093295,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "RDW",
@@ -1025,7 +1067,7 @@
       "prevClose": 9.64,
       "hodDistancePct": 0.7006071929005072,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "COGT",
@@ -1039,7 +1081,7 @@
       "prevClose": 38.86,
       "hodDistancePct": 1.2675731735422844,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     },
     {
       "symbol": "NVTS",
@@ -1053,7 +1095,7 @@
       "prevClose": 11.52,
       "hodDistancePct": 1.2412934355422491,
       "atHod": false,
-      "updatedAt": "2026-08-05T13:14:08.084Z"
+      "updatedAt": "2026-08-05T13:16:06.928Z"
     }
   ]
 }

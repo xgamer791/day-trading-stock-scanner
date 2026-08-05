@@ -12,42 +12,36 @@ function liveDataUrl(): string {
 async function loadScanner(): Promise<ScannerPayload> {
   const key = process.env.NEXT_PUBLIC_POLYGON_API_KEY;
   if (key) {
-    try {
-      const [newsRes, gainersRes] = await Promise.all([
-        fetch(
-          `https://api.polygon.io/v2/reference/news?limit=40&order=desc&sort=published_utc&apiKey=${key}`,
-        ),
-        fetch(
-          `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/gainers?apiKey=${key}`,
-        ),
-      ]);
-      if (newsRes.ok && gainersRes.ok) {
-        const { buildFromPolygon } = await import("@/lib/clientPolygon");
-        return buildFromPolygon(await newsRes.json(), await gainersRes.json());
-      }
-    } catch {
-      /* fall through to Yahoo live.json */
+    const [newsRes, gainersRes] = await Promise.all([
+      fetch(
+        `https://api.polygon.io/v2/reference/news?limit=40&order=desc&sort=published_utc&apiKey=${key}`,
+      ),
+      fetch(
+        `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/gainers?apiKey=${key}`,
+      ),
+    ]);
+    if (!newsRes.ok || !gainersRes.ok) {
+      throw new Error(
+        `Polygon live data failed (news ${newsRes.status}, gainers ${gainersRes.status})`,
+      );
     }
+    const { buildFromPolygon } = await import("@/lib/clientPolygon");
+    return buildFromPolygon(await newsRes.json(), await gainersRes.json());
   }
 
   const res = await fetch(liveDataUrl(), { cache: "no-store" });
   if (!res.ok) {
-    throw new Error(`Live data unavailable (${res.status})`);
+    throw new Error(`Live market data unavailable (${res.status})`);
   }
-  return (await res.json()) as ScannerPayload;
+  const payload = (await res.json()) as ScannerPayload;
+  if (!payload.gainers?.length && !payload.premarket?.length) {
+    throw new Error("Live market data returned no movers");
+  }
+  return payload;
 }
 
-const EMPTY: ScannerPayload = {
-  session: "closed",
-  updatedAt: new Date(0).toISOString(),
-  source: "yahoo",
-  news: [],
-  premarket: [],
-  gainers: [],
-};
-
 export function ScannerBoard() {
-  const [data, setData] = useState<ScannerPayload>(EMPTY);
+  const [data, setData] = useState<ScannerPayload | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("pre");
@@ -77,7 +71,7 @@ export function ScannerBoard() {
     };
   }, []);
 
-  const updatedLabel = data.updatedAt
+  const updatedLabel = data?.updatedAt
     ? new Date(data.updatedAt).toLocaleTimeString("en-US", {
         hour: "2-digit",
         minute: "2-digit",
@@ -87,8 +81,7 @@ export function ScannerBoard() {
       })
     : "—";
 
-  const sourceLabel =
-    data.source === "polygon" ? "POLYGON" : data.source === "yahoo" ? "YAHOO LIVE" : "DEMO";
+  const sourceLabel = data?.source === "polygon" ? "POLYGON" : "YAHOO LIVE";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -123,7 +116,7 @@ export function ScannerBoard() {
               High-of-day peaking stocks · US equities
             </div>
           </div>
-          <SessionBadge session={data.session} />
+          <SessionBadge session={data?.session ?? "closed"} />
         </div>
 
         <div
@@ -153,10 +146,10 @@ export function ScannerBoard() {
             style={{
               border: "1px solid var(--border-strong)",
               padding: "4px 8px",
-              color: data.source === "demo" ? "var(--amber)" : "var(--hod)",
+              color: "var(--hod)",
             }}
           >
-            {sourceLabel}
+            {data ? sourceLabel : "LOADING"}
           </span>
         </div>
       </div>
@@ -164,14 +157,15 @@ export function ScannerBoard() {
       {error && (
         <div
           style={{
-            padding: "10px 20px",
+            padding: "14px 20px",
             background: "var(--red-dim)",
             color: "var(--red)",
-            fontSize: 13,
+            fontSize: 14,
+            fontWeight: 600,
             borderBottom: "1px solid var(--border)",
           }}
         >
-          {error}
+          Live data error: {error}
         </div>
       )}
 
@@ -211,9 +205,9 @@ export function ScannerBoard() {
           <PanelHeader
             title="Breaking News"
             subtitle="Most recent market headlines tied to active tickers"
-            count={data.news.length}
+            count={data?.news.length ?? 0}
           />
-          <NewsFeed items={data.news} />
+          <NewsFeed items={data?.news ?? []} />
         </section>
 
         <section
@@ -226,10 +220,13 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Premarket HOD Gainers"
-            subtitle="Live Yahoo premarket / early runners — HOD peaks ranked first"
-            count={data.premarket.length}
+            subtitle="Live premarket / early runners — HOD peaks flagged"
+            count={data?.premarket.length ?? 0}
           />
-          <StockTable rows={data.premarket} emptyText="No premarket gainers right now" />
+          <StockTable
+            rows={data?.premarket ?? []}
+            emptyText={error ? "Live data error" : "Loading live premarket movers…"}
+          />
         </section>
 
         <section
@@ -238,10 +235,13 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Market Top Gainers"
-            subtitle="Live Yahoo day gainers — stocks at/near high of day ranked first"
-            count={data.gainers.length}
+            subtitle="Live day gainers — stocks at/near high of day flagged"
+            count={data?.gainers.length ?? 0}
           />
-          <StockTable rows={data.gainers} emptyText="No market gainers right now" />
+          <StockTable
+            rows={data?.gainers ?? []}
+            emptyText={error ? "Live data error" : "Loading live market gainers…"}
+          />
         </section>
       </main>
     </div>

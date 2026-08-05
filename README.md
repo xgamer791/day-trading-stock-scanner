@@ -4,54 +4,47 @@ Real-time day trading stock scanner focused on **high-of-day (HOD) peaking** sto
 
 Inspired by [Realtime Stock Screener](https://apps.apple.com/us/app/realtime-stock-screener/id1563483991).
 
+## Live
+
+**https://xgamer791.github.io/day-trading-stock-scanner/**
+
+Deployed automatically to GitHub Pages on every push to `main`, and refreshed every 5 minutes during US market hours.
+
 ## Layout
 
 | Panel | Content |
 |-------|---------|
 | **Left** | Breaking / most recent news |
 | **Center** | Premarket HOD gainers |
-| **Right** | Market top gainers at HOD |
-
-Only stocks within **0.35% of day high** and green on the day are listed.
+| **Right** | Market top gainers |
 
 ## Stack
 
 - Next.js (App Router) + TypeScript
-- Polygon.io snapshots + news (live)
-- Server-Sent Events stream (~2.5s refresh)
-- Live Yahoo Finance gainers + news (refreshed every 5 minutes via GitHub Actions). Optional Polygon key for exchange-grade snapshots.
-
-## Live
-
-**https://xgamer791.github.io/day-trading-stock-scanner/**
-
-Deployed automatically to GitHub Pages on every push to `main`.
+- Live Yahoo Finance day gainers, premarket movers, and news
+- Optional Polygon key (`POLYGON_API_KEY` / `NEXT_PUBLIC_POLYGON_API_KEY`) for exchange snapshots
+- GitHub Pages + Actions auto-deploy
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env.local
-# Add POLYGON_API_KEY=... for live data
+npm run fetch:live
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## Data accuracy
-
-Live mode uses Polygon US stock **gainers snapshots** and **reference news**. For production day trading, use a Polygon plan with real-time (not delayed) entitlements.
-
-Without `POLYGON_API_KEY`, the UI runs on rotating demo data so you can still verify layout and HOD filters.
+If live data cannot be fetched, the app shows an error — there is no demo fallback.
 
 ## Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Local development |
-| `npm run build` | Production build |
-| `npm start` | Serve production build |
-| `npm test` | Unit tests for HOD filters |
+| `npm run fetch:live` | Pull Yahoo gainers/news into `public/data/live.json` |
+| `npm run dev` | Fetch live data, then local development |
+| `npm run build` | Production static export |
+| `npm test` | Unit tests for HOD helpers |
 
 ## Disclaimer
 

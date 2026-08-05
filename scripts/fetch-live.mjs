@@ -197,7 +197,7 @@ async function main() {
   });
 
   if (gainers.length === 0) {
-    throw new Error("No live gainers returned from Yahoo — aborting demo fallback");
+    throw new Error("No live gainers returned from Yahoo");
   }
 
   const payload = {
