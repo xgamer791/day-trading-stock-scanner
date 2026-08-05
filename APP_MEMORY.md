@@ -24,7 +24,7 @@ This is non-negotiable. Violating it is a failed change.
    - `cache: "no-store"` + cache-bust query params on fetches
    - Short-lived in-flight request dedupe (same tick only)
    - Short-lived discovery **symbol** candidate list (which tickers to quote next) — never reuse stale price/% as LIVE
-   - **Flt column only:** Yahoo `floatShares` via `public/data/floats.json` (Actions) and/or live quoteSummary — this is public float fundamentals, not a price/% cache. Never use shares outstanding as float.
+   - **Flt column only:** Yahoo `impliedSharesOutstanding` (Realtime Flt parity; fallback `sharesOutstanding` → `floatShares`) via `public/data/floats.json` / quoteSummary. Fundamentals only — never a price/% cache. Do not use narrow `floatShares` alone (understates ADR floats vs Realtime).
    - Static app shell (HTML/JS/CSS) on GitHub Pages — that is not the live feed
 4. **On live fetch failure:** show RECONNECTING / error. Do **not** substitute snapshot/cached gainers. Empty or error > wrong/stale numbers.
 5. **%Chg math (must match TradingView / Realtime):**  
@@ -55,7 +55,7 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 **Required live path (client):**
 1. Discover via live **Nasdaq Most Advanced** each poll (runners). Primary quotes from **Yahoo day_gainers** (`regularMarketPrice` + `regularMarketPreviousClose` on the same payload). Spark only fills Most Advanced symbols missing from day_gainers (≤30). Do **not** multi-batch spark 100+ symbols or hit the 10k full screener on the hot path — that rate-limits CORS proxies (“Live Yahoo spark failed”).
 2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**
-3. **Flt** = Yahoo `defaultKeyStatistics.floatShares` / 1e6 (public float). Do not show shares outstanding as float.
+3. **Flt** = Yahoo `impliedSharesOutstanding` / 1e6 (Realtime parity; then `sharesOutstanding`, then `floatShares`).
 4. Poll ~every **3s**; on failure show RECONNECTING (not LIVE). Never fall back to `live.json` for price/%Chg.
 
 ---

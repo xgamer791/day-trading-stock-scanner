@@ -1,6 +1,10 @@
 /**
- * Yahoo Finance floatShares (public float) via crumb session.
- * Returns millions of shares — same field retail scanners use (not shares outstanding).
+ * Yahoo Finance share-count for Realtime Screener Flt column parity.
+ *
+ * Realtime's Flt tracks Yahoo impliedSharesOutstanding (ADR / diluted share
+ * count), NOT narrow floatShares — e.g. YXT ≈ 6M, JLHL ≈ 21M, RITR ≈ 62M.
+ * Fallback: sharesOutstanding → floatShares.
+ * Returns millions of shares.
  */
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -24,6 +28,21 @@ function mergeCookies(existing, res) {
     if (eq > 0) map.set(pair.slice(0, eq), pair.slice(eq + 1));
   }
   return [...map.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+}
+
+function rawShares(v) {
+  const n = typeof v === "object" && v != null ? Number(v.raw) : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Pick Realtime-parity share count from Yahoo defaultKeyStatistics. */
+export function realtimeFloatShares(ks) {
+  if (!ks || typeof ks !== "object") return null;
+  return (
+    rawShares(ks.impliedSharesOutstanding) ??
+    rawShares(ks.sharesOutstanding) ??
+    rawShares(ks.floatShares)
+  );
 }
 
 export async function createYahooSession() {
@@ -59,11 +78,10 @@ export async function createYahooSession() {
   return { cookie, crumb };
 }
 
-/** @returns {Promise<Map<string, number>>} symbol → float millions */
+/** @returns {Promise<Map<string, number>>} symbol → float millions (Realtime Flt) */
 export async function fetchFloatMillions(symbols, session) {
   const uniq = [...new Set(symbols.map((s) => String(s || "").toUpperCase()).filter(Boolean))];
   const out = new Map();
-  // Gentle concurrency — quoteSummary is per-symbol.
   const queue = [...uniq];
   const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
     while (queue.length) {
@@ -81,15 +99,14 @@ export async function fetchFloatMillions(symbols, session) {
           },
         });
         if (res.status === 401 || res.status === 403) {
-          // Session died — stop this worker; caller may refresh.
           queue.length = 0;
           break;
         }
         if (!res.ok) continue;
         const data = await res.json();
-        const fs = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics?.floatShares;
-        const raw = typeof fs === "object" && fs ? Number(fs.raw) : Number(fs);
-        if (Number.isFinite(raw) && raw > 0) out.set(sym, raw / 1_000_000);
+        const ks = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
+        const raw = realtimeFloatShares(ks);
+        if (raw != null) out.set(sym, raw / 1_000_000);
       } catch {
         /* skip symbol */
       }

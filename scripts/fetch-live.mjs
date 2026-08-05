@@ -312,8 +312,8 @@ async function saveFloatMap(map) {
     JSON.stringify(
       {
         updatedAt: new Date().toISOString(),
-        source: "yahoo-floatShares",
-        note: "Public float in millions (Yahoo defaultKeyStatistics.floatShares / 1e6). Not shares outstanding.",
+        source: "yahoo-impliedSharesOutstanding",
+        note: "Realtime Flt parity: Yahoo impliedSharesOutstanding (fallback sharesOutstanding, then floatShares) / 1e6.",
         floats,
       },
       null,
@@ -322,17 +322,21 @@ async function saveFloatMap(map) {
   );
 }
 
-/** Refresh Yahoo floatShares for symbols; merge into persistent floats.json. */
+/** Refresh Realtime-parity Flt for symbols; overwrite prior floatShares values. */
 async function enrichFloats(symbols) {
-  const map = await loadFloatMap();
-  const need = [...new Set(symbols.map((s) => String(s || "").toUpperCase()).filter(Boolean))].filter(
-    (s) => !map.has(s),
-  );
-  // Re-fetch a slice of known symbols too so floats stay current after offerings/unlocks.
-  const refresh = [...new Set(symbols.map((s) => String(s || "").toUpperCase()).filter(Boolean))]
-    .filter((s) => map.has(s))
-    .slice(0, 25);
-  const targets = [...new Set([...need, ...refresh])];
+  let map = await loadFloatMap();
+  // Drop legacy floatShares cache — those understate ADR floats vs Realtime.
+  try {
+    const prev = JSON.parse(await readFile(FLOATS_OUT, "utf8"));
+    if (prev?.source && prev.source !== "yahoo-impliedSharesOutstanding") {
+      map = new Map();
+      console.log(`Floats: clearing legacy source (${prev.source})`);
+    }
+  } catch {
+    /* no prior file */
+  }
+
+  const targets = [...new Set(symbols.map((s) => String(s || "").toUpperCase()).filter(Boolean))];
   if (!targets.length) return map;
 
   try {
@@ -342,7 +346,7 @@ async function enrichFloats(symbols) {
     await saveFloatMap(map);
     console.log(`Floats: fetched ${fresh.size}/${targets.length} (map size ${map.size})`);
   } catch (e) {
-    console.warn(`Floats: Yahoo floatShares failed (${e.message || e}) — keeping prior map`);
+    console.warn(`Floats: Yahoo Flt fetch failed (${e.message || e}) — keeping prior map`);
     if (map.size) await saveFloatMap(map);
   }
   return map;

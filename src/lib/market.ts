@@ -101,10 +101,10 @@ export function formatVolume(n: number): string {
 
 export function formatFloat(n?: number | null): string {
   if (n == null || !Number.isFinite(n)) return "—";
+  // Realtime-style whole units: 6M, 21M, 86M, 86K
   if (n >= 1000) return `${(n / 1000).toFixed(1)}B`;
-  if (n >= 10) return `${n.toFixed(0)}M`;
-  if (n >= 1) return `${n.toFixed(1)}M`;
-  return `${(n * 1000).toFixed(0)}K`;
+  if (n >= 1) return `${Math.round(n)}M`;
+  return `${Math.round(n * 1000)}K`;
 }
 
 export function timeAgo(iso: string, now = Date.now()): string {

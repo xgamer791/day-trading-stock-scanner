@@ -6,12 +6,12 @@
  *  2) Yahoo day_gainers (up to 100) — last + prevClose from SAME payload
  *  3) Yahoo spark ONLY for Most Advanced symbols missing from day_gainers
  *  4) Rank by same-quote % — top 50
- *  5) Attach float (Yahoo floatShares → millions) — fundamentals, not price/%
+ *  5) Attach Flt (Yahoo impliedSharesOutstanding → millions; Realtime parity)
  *
  * Do NOT multi-batch spark 100+ symbols or download the 10k screener every tick —
  * that rate-limits CORS proxies and surfaces "Live Yahoo spark failed".
  * NEVER reads live.json for mover price/%Chg/volume rows.
- * floats.json is allowed for the Flt column only (Yahoo public float, not a price cache).
+ * floats.json is allowed for the Flt column only (fundamentals, not a price cache).
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
@@ -64,11 +64,27 @@ async function fetchViaProxy(url: string, timeoutMs = 7000): Promise<unknown> {
   return JSON.parse(await fetchTextViaProxy(url, timeoutMs));
 }
 
-/** In-memory Yahoo floatShares (millions). Fundamentals — not used as live price/%. */
+/** In-memory Realtime-parity Flt (millions). Fundamentals — not used as live price/%. */
 const floatCache = new Map<string, number>();
 let floatFileAt = 0;
+let floatFileSource: string | null = null;
 let yahooCrumb: string | null = null;
 let yahooCrumbAt = 0;
+
+function rawShares(v: unknown): number | null {
+  const n = typeof v === "object" && v != null ? Number((v as { raw?: number }).raw) : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Realtime Flt: impliedSharesOutstanding → sharesOutstanding → floatShares. */
+function realtimeFloatShares(ks: Record<string, unknown> | undefined): number | null {
+  if (!ks) return null;
+  return (
+    rawShares(ks.impliedSharesOutstanding) ??
+    rawShares(ks.sharesOutstanding) ??
+    rawShares(ks.floatShares)
+  );
+}
 
 function floatsJsonUrl(): string {
   const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
@@ -76,7 +92,13 @@ function floatsJsonUrl(): string {
 }
 
 async function refreshFloatFile(): Promise<void> {
-  if (Date.now() - floatFileAt < FLOAT_FILE_REFRESH_MS && floatCache.size) return;
+  if (
+    Date.now() - floatFileAt < FLOAT_FILE_REFRESH_MS &&
+    floatCache.size &&
+    floatFileSource === "yahoo-impliedSharesOutstanding"
+  ) {
+    return;
+  }
   try {
     const res = await fetch(floatsJsonUrl(), {
       cache: "no-store",
@@ -84,13 +106,17 @@ async function refreshFloatFile(): Promise<void> {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return;
-    const data = (await res.json()) as { floats?: Record<string, number> };
+    const data = (await res.json()) as { floats?: Record<string, number>; source?: string };
+    // Ignore legacy floatShares file so ADR floats are not stuck understated.
+    if (data?.source && data.source !== "yahoo-impliedSharesOutstanding") return;
     const floats = data?.floats || {};
+    floatCache.clear();
     for (const [sym, v] of Object.entries(floats)) {
       const n = Number(v);
       if (Number.isFinite(n) && n > 0) floatCache.set(String(sym).toUpperCase(), n);
     }
     floatFileAt = Date.now();
+    floatFileSource = data?.source || "yahoo-impliedSharesOutstanding";
   } catch {
     /* floats file optional until Actions publishes it */
   }
@@ -114,7 +140,7 @@ async function ensureYahooCrumb(): Promise<string | null> {
   }
 }
 
-/** Live Yahoo floatShares for symbols missing from floats.json (max few per poll). */
+/** Live Yahoo Flt for symbols missing from floats.json (max few per poll). */
 async function fetchMissingFloats(symbols: string[]): Promise<void> {
   const need = [...new Set(symbols.map((s) => s.toUpperCase()))].filter((s) => !floatCache.has(s)).slice(0, 8);
   if (!need.length) return;
@@ -130,12 +156,12 @@ async function fetchMissingFloats(symbols: string[]): Promise<void> {
         )}?modules=defaultKeyStatistics&crumb=${encodeURIComponent(crumb)}`;
         const data = (await fetchViaProxy(url, 7000)) as {
           quoteSummary?: {
-            result?: Array<{ defaultKeyStatistics?: { floatShares?: { raw?: number } | number } }>;
+            result?: Array<{ defaultKeyStatistics?: Record<string, unknown> }>;
           };
         };
-        const fs = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics?.floatShares;
-        const raw = typeof fs === "object" && fs ? Number(fs.raw) : Number(fs);
-        if (Number.isFinite(raw) && raw > 0) floatCache.set(sym, raw / 1_000_000);
+        const ks = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
+        const raw = realtimeFloatShares(ks);
+        if (raw != null) floatCache.set(sym, raw / 1_000_000);
       } catch {
         /* keep empty for this symbol */
       }
@@ -405,7 +431,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, FEED_LIMIT);
 
-  // Float is Yahoo public floatShares (millions). Never substitute shares outstanding.
+  // Flt = Yahoo impliedSharesOutstanding (Realtime parity), millions.
   const movers = await attachFloats(ranked);
 
   if (session !== "premarket" && session !== "closed" && movers.length < 3) {
