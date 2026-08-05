@@ -28,6 +28,9 @@ export type NewsItem = {
   url: string;
   tickers: string[];
   summary?: string;
+  /** Live quote enrichment for teatime-style ticker tile (optional). */
+  price?: number | null;
+  changePct?: number | null;
 };
 
 export type ScannerPayload = {
