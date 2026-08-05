@@ -117,6 +117,8 @@ type QueueJob<T> = {
   run: () => Promise<T>;
   resolve: (v: T) => void;
   reject: (e: unknown) => void;
+  /** When the job entered the queue — used to drop superseded work. */
+  queuedAt: number;
 };
 
 const PRIORITY_RANK: Record<TransportPriority, number> = {
@@ -127,22 +129,77 @@ const PRIORITY_RANK: Record<TransportPriority, number> = {
 
 const queue: QueueJob<unknown>[] = [];
 let active = 0;
-/** Gainers need exclusive bandwidth; keep concurrency at 1 for proxy stability. */
-const MAX_ACTIVE = 1;
+let activeNonCritical = 0;
+
+/**
+ * Concurrency lanes.
+ *
+ * Previously this was a single slot (MAX_ACTIVE = 1), which meant one *already
+ * running* low-priority job (a 12s Nasdaq /summary Flt call, a 16s news fetch)
+ * held the only slot while the 3s `day_gainers` poll waited behind it. Priority
+ * sorting does not help once a job is active — there is no preemption. That
+ * starvation is what surfaced as Safari "Load failed" every ~20s.
+ *
+ * Now: a small total pool, with slots *reserved* for critical work so the ranked
+ * gainers poll can always start immediately.
+ */
+const MAX_ACTIVE = 2;
+/**
+ * Non-critical work may never occupy more than this many slots, which leaves at
+ * least one slot permanently available to `critical`. The original comment here
+ * ("keep concurrency at 1 for proxy stability") was right that public proxies
+ * punish parallelism — so the fix is the *reservation*, not raw concurrency.
+ * Two total is the smallest pool that can guarantee critical never blocks.
+ */
+const MAX_NONCRITICAL_ACTIVE = 1;
+
+/**
+ * A queued non-critical job older than this is for a superseded poll — drop it
+ * rather than spending a proxy round-trip (and rate-limit budget) on stale work.
+ */
+const STALE_QUEUE_MS = 20_000;
+
+function canStart(job: QueueJob<unknown>): boolean {
+  if (active >= MAX_ACTIVE) return false;
+  if (job.priority === "critical") return true;
+  return activeNonCritical < MAX_NONCRITICAL_ACTIVE;
+}
 
 function pumpQueue() {
-  while (active < MAX_ACTIVE && queue.length) {
-    queue.sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
-    const job = queue.shift();
-    if (!job) return;
+  if (!queue.length) return;
+  queue.sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
+
+  // Walk the queue rather than only considering the head: a blocked low-priority
+  // job must not prevent a critical job behind it from starting.
+  for (let i = 0; i < queue.length; ) {
+    const job = queue[i];
+
+    if (job.priority !== "critical" && Date.now() - job.queuedAt > STALE_QUEUE_MS) {
+      queue.splice(i, 1);
+      job.reject(new Error("transport: dropped stale queued request"));
+      continue;
+    }
+
+    if (!canStart(job)) {
+      i += 1;
+      continue;
+    }
+
+    queue.splice(i, 1);
     active += 1;
+    const nonCritical = job.priority !== "critical";
+    if (nonCritical) activeNonCritical += 1;
+
     job
       .run()
       .then(job.resolve, job.reject)
       .finally(() => {
         active -= 1;
+        if (nonCritical) activeNonCritical -= 1;
         pumpQueue();
       });
+
+    if (active >= MAX_ACTIVE) return;
   }
 }
 
@@ -153,6 +210,7 @@ function enqueue<T>(priority: TransportPriority, run: () => Promise<T>): Promise
       run: run as () => Promise<unknown>,
       resolve: resolve as (v: unknown) => void,
       reject,
+      queuedAt: Date.now(),
     });
     pumpQueue();
   });

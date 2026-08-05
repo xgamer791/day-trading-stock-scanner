@@ -110,6 +110,43 @@ Related failure (~20s “list randomly switches to a completely different board�
 
 ---
 
+## Transport starvation — never reintroduce (fixed 2026-08-05)
+
+Symptom: "Live data error: Load failed" every ~20s, and the Gainers board cycling between
+two *different* stock lists — sometimes day_gainers only, sometimes day_gainers plus the
+Most Advanced / spark runners.
+
+Root cause was **not** the proxies themselves. `corsTransport.ts` ran a single queue slot
+(`MAX_ACTIVE = 1`). Priority sorting only orders *waiting* jobs — there is no preemption —
+so one already-running low-priority call (a 12s Nasdaq `/summary` Flt lookup, a 16s news
+fetch) held the only slot while the 3s `day_gainers` poll waited behind it. Whichever
+optional call happened to win a given poll decided what the board looked like, which is why
+the list flickered between two identities.
+
+Rules going forward:
+
+1. **Keep a slot reserved for `critical`.** `MAX_ACTIVE = 2` with `MAX_NONCRITICAL_ACTIVE = 1`.
+   Do not "simplify" this back to a single shared slot — public proxies do punish parallelism,
+   which is why the pool stays small, but the *reservation* is what keeps the ranked board alive.
+2. **Enrichment must have a wall-clock ceiling.** `FLOAT_TOTAL_BUDGET_MS` caps the whole Flt
+   fill. Without it, 12 symbols × 12s timeouts could add ~36s to a 3s poll.
+3. **Do not build boards that are not on screen.** `fetchLiveScannerClient({ includeAfterHours })`
+   — `ScannerBoard` passes `false` unless the After Hours tab is selected. AH costs 3 extra
+   Yahoo screener calls plus up to 12 Nasdaq lookups per poll. This is **not** caching; it is
+   declining to fetch data nothing is displaying. Note the consequence: on the desktop grid
+   (>960px, all four panels visible) the AH panel stays empty until that tab is picked —
+   accepted because the app is going iOS-only.
+4. **`Math.abs(recomputed - changePct) < 0.05` alone proves nothing.** Every constructor here
+   defines `changePct` as exactly that expression, so the comparison is always true. Validate
+   the *inputs* (`price > 0`, `prevClose > 0`, finite positive %) — see `rankMovers()`.
+
+**Polygon is load-bearing.** With `POLYGON_API_KEY` unset as an Actions secret,
+`NEXT_PUBLIC_POLYGON_API_KEY` compiles to `""`, `hasClientPolygonKey()` is false, and there is
+**no fallback at all** behind the free proxies — any proxy flake becomes a cleared board. Check
+`gh secret list` before blaming the transport.
+
+---
+
 ## News sources (News tab)
 
 - Source registry: `src/lib/newsSources.ts` — **reuse / extend this file** for future news scans.

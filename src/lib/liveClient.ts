@@ -30,6 +30,8 @@ const FEED_LIMIT = 50;
 /** Keep Flt fills small — too many summary proxy hits kill day_gainers (~20s). */
 const FLOAT_SYMBOL_MAX = 12;
 const FLOAT_BATCH = 4;
+/** Whole-Flt-fill wall-clock ceiling, so enrichment can never own the poll. */
+const FLOAT_TOTAL_BUDGET_MS = 5_000;
 
 /**
  * Prefer direct fetch (Node / non-CORS contexts), then resilient CORS proxies
@@ -404,14 +406,23 @@ async function fetchLiveMarketCaps(symbols: string[]): Promise<Map<string, numbe
   const out = new Map<string, number>();
   if (!need.length) return out;
 
+  // Hard wall-clock budget for the whole Flt fill. Without this, 12 symbols in
+  // batches of 4 at a 12s timeout each could add ~36s to a poll that is supposed
+  // to complete in ~3s — the poll then overruns its own interval forever and the
+  // board reads as stuck / RECONNECTING. Flt is enrichment: it must degrade, not
+  // dominate. Soft-fail per symbol is already the contract (app memory §Flt).
+  const deadline = Date.now() + FLOAT_TOTAL_BUDGET_MS;
+
   for (let i = 0; i < need.length; i += FLOAT_BATCH) {
+    if (Date.now() >= deadline) break;
     const chunk = need.slice(i, i + FLOAT_BATCH);
+    const remaining = Math.max(1500, deadline - Date.now());
     await Promise.all(
       chunk.map(async (symbol) => {
         try {
           const data = (await fetchViaProxy(
             `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,
-            12000,
+            Math.min(12000, remaining),
             "low",
           )) as {
             data?: { summaryData?: { MarketCap?: { value?: string } } };
@@ -463,6 +474,33 @@ function toMover(q: LiveQuote): StockMover {
   };
 }
 
+/**
+ * Rank live quotes into the displayed board.
+ *
+ * The previous inline filter compared `m.changePct` against a recomputation of
+ * `(price - prevClose) / prevClose` — but every constructor here (`quoteFromLastPrev`,
+ * `afterHoursQuoteFromRaw`, Polygon) *defines* `changePct` as exactly that expression
+ * and `toMover` passes it through untouched. The comparison was therefore always
+ * true: a no-op wearing the costume of a data-integrity check.
+ *
+ * The genuine risk it was meant to catch (STOCK_SCANNER_APP_MEMORY: "never pair a
+ * Yahoo last with a Nasdaq %") is a row whose inputs are incoherent, so validate
+ * the inputs themselves.
+ */
+function rankMovers(quotes: Iterable<LiveQuote>): StockMover[] {
+  return [...quotes]
+    .map(toMover)
+    .filter((m) => {
+      if (!(m.price > 0) || !(m.prevClose > 0)) return false;
+      if (!Number.isFinite(m.changePct) || !(m.changePct > 0)) return false;
+      // Guard against a % that did not come from this row's own last/prevClose.
+      const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
+      return Math.abs(recomputed - m.changePct) < 0.05;
+    })
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, FEED_LIMIT);
+}
+
 function polygonToLiveQuotes(
   poly: Awaited<ReturnType<typeof fetchPolygonGainerQuotes>>,
 ): Map<string, LiveQuote> {
@@ -483,8 +521,24 @@ function polygonToLiveQuotes(
   return map;
 }
 
+export type LiveScanOptions = {
+  /**
+   * Build the After Hours board this poll. Defaults to true for callers that do
+   * not care, but ScannerBoard passes `false` unless the AH tab is visible.
+   *
+   * This is NOT a cache — it simply does not fetch a board that is not on screen.
+   * Building AH costs 3 extra Yahoo screener calls plus up to 12 Nasdaq /summary
+   * calls per poll; running that every 3s behind the ranked board is the single
+   * largest source of proxy pressure during the 16:00–20:00 ET window.
+   */
+  includeAfterHours?: boolean;
+};
+
 /** Live scan — no live.json, no floats.json, no last-tick paint. */
-export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
+export async function fetchLiveScannerClient(
+  opts: LiveScanOptions = {},
+): Promise<ScannerPayload> {
+  const { includeAfterHours = true } = opts;
   const session = sessionNow();
 
   let advanced: Seed[] = [];
@@ -564,14 +618,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     if (q && (!q.name || q.name === q.symbol) && s.name) q.name = s.name;
   }
 
-  let movers = [...quotes.values()]
-    .map(toMover)
-    .filter((m) => {
-      const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
-      return Math.abs(recomputed - m.changePct) < 0.05;
-    })
-    .sort((a, b) => b.changePct - a.changePct)
-    .slice(0, FEED_LIMIT);
+  let movers = rankMovers(quotes.values());
 
   // Flt for ranked rows missing share counts (spark / Polygon).
   const stillNeed = movers.filter((m) => m.floatMillions == null).map((m) => m.symbol);
@@ -587,17 +634,10 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   // After Hours board — only during 16:00–20:00 ET. Ranked by post-market %
   // vs regular close, not regular day_gainers %. Soft-fail (never kill Gainers).
   let afterhoursMovers: StockMover[] = [];
-  if (session === "afterhours") {
+  if (session === "afterhours" && includeAfterHours) {
     try {
       const ahMap = await fetchAfterHoursGainerQuotes(dayGainerRaw);
-      afterhoursMovers = [...ahMap.values()]
-        .map(toMover)
-        .filter((m) => {
-          const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
-          return Math.abs(recomputed - m.changePct) < 0.05;
-        })
-        .sort((a, b) => b.changePct - a.changePct)
-        .slice(0, FEED_LIMIT);
+      afterhoursMovers = rankMovers(ahMap.values());
 
       const ahNeed = afterhoursMovers
         .filter((m) => m.floatMillions == null)

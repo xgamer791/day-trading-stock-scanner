@@ -21,6 +21,16 @@ export function ScannerBoard() {
   const newsInFlight = useRef(false);
   const newsRef = useRef<NewsItem[]>([]);
   newsRef.current = news;
+  /**
+   * Only build the After Hours board while that tab is on screen.
+   *
+   * A ref (not a dep) so switching tabs does not tear down and restart the 3s
+   * poll interval. AH costs 3 extra Yahoo screener calls plus up to 12 Nasdaq
+   * /summary calls per poll — running it every 3s behind the ranked board is
+   * what saturates the public proxies during 16:00–20:00 ET.
+   */
+  const ahTabRef = useRef(false);
+  ahTabRef.current = mobileTab === "ah";
 
   useEffect(() => {
     const id = setInterval(() => setClockSession(getMarketSession()), 1000);
@@ -35,7 +45,9 @@ export function ScannerBoard() {
       inFlight.current = true;
       try {
         // LIVE ONLY — never live.json / snapshot (STOCK_SCANNER_APP_MEMORY.md)
-        const live = await fetchLiveScannerClient();
+        const live = await fetchLiveScannerClient({
+          includeAfterHours: ahTabRef.current,
+        });
         if (cancelled) return;
 
         if (
