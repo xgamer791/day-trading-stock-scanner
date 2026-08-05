@@ -148,6 +148,7 @@ async function fetchYahooQuote(symbol: string): Promise<{
   prePct: number | null;
   prePrice: number | null;
   hodDistancePct: number;
+  hodGainPct: number;
 } | null> {
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`;
   const res = await fetchViaProxy(url);
