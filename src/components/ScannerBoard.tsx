@@ -70,7 +70,7 @@ export function ScannerBoard() {
     };
 
     tick();
-    const id = setInterval(tick, 4000);
+    const id = setInterval(tick, 5000);
     return () => {
       cancelled = true;
       clearInterval(id);
