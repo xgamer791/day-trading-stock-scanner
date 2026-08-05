@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-08-05T14:31:52.820Z",
+  "updatedAt": "2026-08-05T14:36:49.404Z",
   "description": "HOD Scanner screens common stocks across official US exchange directories and major index membership lists. Feeds show the top 20 HOD gainers only.",
   "exchanges": {
     "NASDAQ": {
@@ -25,6 +25,12 @@
     }
   },
   "indexes": {
+    "Nasdaq Composite (all NASDAQ-listed commons)": {
+      "symbolCount": 3557
+    },
+    "Nasdaq-100": {
+      "symbolCount": 50
+    },
     "Dow Jones Industrial Average (DJIA)": {
       "symbolCount": 30
     },
@@ -46,7 +52,9 @@
     "feedLimit": 20
   },
   "marketsScreened": [
-    "NASDAQ (Global Select / Global Market / Capital Market)",
+    "NASDAQ",
+    "Nasdaq Composite (all NASDAQ-listed common stocks)",
+    "Nasdaq-100",
     "NYSE",
     "NYSE American (AMEX)",
     "NYSE Arca",

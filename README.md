@@ -22,7 +22,7 @@ Auto-deploys on every push to `main`. The browser rescans every **3 seconds**; A
 
 **Exchanges:** NASDAQ, NYSE, NYSE American (AMEX), NYSE Arca, Cboe BZX, IEX (when listed)
 
-**Indexes:** Dow Jones Industrial Average, S&P 500, S&P MidCap 400, S&P SmallCap 600, Russell 1000, Russell 2000, Russell 3000
+**Indexes:** Nasdaq Composite, Nasdaq-100, Dow Jones Industrial Average, S&P 500, S&P MidCap 400, S&P SmallCap 600, Russell 1000, Russell 2000, Russell 3000
 
 Universe is rebuilt from official Nasdaq Trader symbol directories + index membership lists (`public/data/coverage.json`). Feeds show the **top 20** HOD gainers only.
 

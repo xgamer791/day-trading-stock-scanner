@@ -148,6 +148,25 @@ async function loadGithubAllTickers() {
   }
 }
 
+
+async function loadNasdaq100() {
+  try {
+    const res = await fetch("https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50", {
+      headers: { "User-Agent": UA, Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    const rows = data?.data?.STOCKS?.Nasdaq100Movers?.table?.rows || [];
+    return rows
+      .map((r) => normalize(r.symbol))
+      .filter((s) => s && !isJunkSymbol(s));
+  } catch (err) {
+    console.warn("Nasdaq-100 movers list unavailable:", err.message);
+    return [];
+  }
+}
+
+
 async function main() {
   console.log("Building full US market universe…");
   const { byExchange, meta } = await loadNasdaqTrader();
@@ -170,12 +189,13 @@ async function main() {
   ]);
 
   const indexes = {
+    "Nasdaq Composite (all NASDAQ-listed commons)": byExchange.NASDAQ.slice(),
+    "Nasdaq-100": await loadNasdaq100(),
     "Dow Jones Industrial Average (DJIA)": DOW_30.map(normalize),
     "S&P 500": sp500,
     "S&P MidCap 400": sp400,
     "S&P SmallCap 600": sp600,
     // Russell families are exchange-listed; official Nasdaq Trader dirs cover their members.
-    // We label the full listed universe as Russell 3000-equivalent coverage.
     "Russell 1000 / 2000 / 3000 (via full listed US equity universe)": [],
   };
 
@@ -204,7 +224,9 @@ async function main() {
       feedLimit: 20,
     },
     marketsScreened: [
-      "NASDAQ (Global Select / Global Market / Capital Market)",
+      "NASDAQ",
+      "Nasdaq Composite (all NASDAQ-listed common stocks)",
+      "Nasdaq-100",
       "NYSE",
       "NYSE American (AMEX)",
       "NYSE Arca",
