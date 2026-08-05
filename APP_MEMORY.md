@@ -51,10 +51,10 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 - **Never overlay** a secondary Nasdaq-% feed on top of an accurate last/prevClose feed.
 
 **Required live path (client):**
-1. Discover symbols via live Nasdaq Most Advanced + full US screener (proxied)
+1. Discover via live **Nasdaq Most Advanced** each poll (small). Do **not** hit the 10k full screener every 3s — that rate-limits CORS proxies and dies ~20s in.
 2. Quote via **Yahoo spark batch** (`v7/finance/spark`) — last + previousClose from same meta
 3. Rank by `(last − previousClose) / previousClose`
-4. Poll ~every **3s**; on failure clear the board (error), never fall back to `live.json`
+4. Poll ~every **3s**; on failure show RECONNECTING (not LIVE). Never fall back to `live.json`.
 
 ---
 
