@@ -13,23 +13,23 @@ Owner intent: Realtime Stock Screener–style **top % gainers** across the **ent
 This is non-negotiable. Violating it is a failed change.
 
 1. **Live gainers / premarket panels must use LIVE API data only** on every successful poll.
-2. **FORBIDDEN as a source for live mover rows (price, %Chg, volume, HOD/OFF):**
+2. **FORBIDDEN as a source for live mover rows (price, %Chg, volume, Flt, HOD/OFF):**
    - `public/data/live.json` / Actions snapshot as the displayed live feed
-   - In-memory “last good tick” used as if it were fresh live data after a failed poll (do not silently keep painting stale rows as LIVE)
-   - LocalStorage / sessionStorage / IndexedDB for quotes or gainers
+   - `public/data/floats.json` / any fundamentals snapshot file for the Flt column
+   - In-memory “last good tick” / float maps reused across polls as if fresh (do not keep painting stale rows as LIVE after a failed poll — clear rows)
+   - LocalStorage / sessionStorage / IndexedDB for quotes, gainers, or float
    - Service worker caches for market data
    - CDN/`live.json` fallback when browser live fetch fails
    - Mixing a live last price with a stale % from another source
 3. **Allowed:**
    - `cache: "no-store"` + cache-bust query params on fetches
    - Short-lived in-flight request dedupe (same tick only)
-   - Short-lived discovery **symbol** candidate list (which tickers to quote next) — never reuse stale price/% as LIVE
-   - **Flt column only:** Yahoo `impliedSharesOutstanding` (Realtime Flt parity; fallback `sharesOutstanding` → `floatShares`) via `public/data/floats.json` / quoteSummary. Fundamentals only — never a price/% cache. Do not use narrow `floatShares` alone (understates ADR floats vs Realtime).
+   - Short-lived discovery **symbol** candidate list (which tickers to quote next) — never reuse stale price/%/vol/Flt as LIVE
    - Static app shell (HTML/JS/CSS) on GitHub Pages — that is not the live feed
-4. **On live fetch failure:** show RECONNECTING / error. Do **not** substitute snapshot/cached gainers. Empty or error > wrong/stale numbers.
+4. **On live fetch failure:** show RECONNECTING / error and **clear** mover rows. Do **not** substitute snapshot/cached gainers. Empty or error > wrong/stale numbers.
 5. **%Chg math (must match TradingView / Realtime):**  
    `(last − previousClose) / previousClose` from the **same quote payload**. Never pair Yahoo last with Nasdaq screener %.
-6. If GitHub Pages CORS forces a proxy: proxies are for transport only. They must still return **current** API payloads. A proxy is not a license to serve `live.json`.
+6. If GitHub Pages CORS forces a proxy: proxies are for transport only. They must still return **current** API payloads. A proxy is not a license to serve `live.json` or `floats.json`.
 
 ---
 
@@ -53,10 +53,10 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 - **Never overlay** a secondary Nasdaq-% feed on top of an accurate last/prevClose feed.
 
 **Required live path (client):**
-1. Discover via live **Nasdaq Most Advanced** each poll (runners). Primary quotes from **Yahoo day_gainers** (`regularMarketPrice` + `regularMarketPreviousClose` on the same payload). Spark only fills Most Advanced symbols missing from day_gainers (≤30). Do **not** multi-batch spark 100+ symbols or hit the 10k full screener on the hot path — that rate-limits CORS proxies (“Live Yahoo spark failed”).
+1. Discover via live **Nasdaq Most Advanced** each poll (runners). Primary quotes from **Yahoo day_gainers** — `regularMarketPrice`, `regularMarketPreviousClose`, `regularMarketVolume`, and Flt share counts (`impliedSharesOutstanding` → `sharesOutstanding`) on the **same live payload**. Spark only fills Most Advanced symbols missing from day_gainers (≤30). Do **not** multi-batch spark 100+ symbols or hit the 10k full screener on the hot path.
 2. Rank by `(last − previousClose) / previousClose` from the **same** quote; show **top 50**
-3. **Flt** = Yahoo `impliedSharesOutstanding` / 1e6 (Realtime parity; then `sharesOutstanding`, then `floatShares`).
-4. Poll ~every **3s**; on failure show RECONNECTING (not LIVE). Never fall back to `live.json` for price/%Chg.
+3. **Flt** from that live quote each poll (Realtime parity: implied shares). Spark-only rows may live-fetch quoteSummary **that poll only** — never `floats.json` / cross-poll float cache.
+4. Poll ~every **3s**; on failure show RECONNECTING and clear rows. Never fall back to `live.json` / `floats.json`.
 
 ---
 
@@ -64,14 +64,15 @@ Root cause of past “correct for a split second, then wrong” / “+313% vs Tr
 
 - Next.js static export (`output: "export"`), `basePath` `/day-trading-stock-scanner` when `GITHUB_PAGES=true`.
 - Deploy: `.github/workflows/deploy-pages.yml`.
-- `scripts/fetch-live.mjs` may still build `live.json` for offline/debug/build — **the client live UI must not depend on it for gainers/premarket.**
+- `scripts/fetch-live.mjs` may still build `live.json` / `floats.json` for offline/debug/build — **the client live UI must not depend on them for gainers/premarket/Flt.**
 
 ---
 
 ## Before every PR / push checklist
 
 - [ ] Read this file again
-- [ ] Client gainers path does not call or fall back to `live.json`
+- [ ] Client gainers path does not call or fall back to `live.json` or `floats.json`
 - [ ] %Chg recomputes from same quote’s last + prevClose
-- [ ] Failed live poll does not paint snapshot/cached movers as LIVE
+- [ ] Price, volume, %Chg, and Flt come from the live poll — not cross-poll caches
+- [ ] Failed live poll does not paint snapshot/cached movers as LIVE (rows cleared)
 - [ ] Deployed Pages link verified after change

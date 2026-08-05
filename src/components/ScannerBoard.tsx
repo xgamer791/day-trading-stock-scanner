@@ -63,7 +63,8 @@ export function ScannerBoard() {
         if (cancelled) return;
         setConnected(false);
         setError(err instanceof Error ? err.message : "Failed to load live data");
-        // Keep last live rows only under RECONNECTING (not marked LIVE). Never use live.json.
+        // APP_MEMORY: on failure show RECONNECTING/error — do NOT paint stale last-tick rows.
+        setData(null);
       } finally {
         inFlight.current = false;
       }
