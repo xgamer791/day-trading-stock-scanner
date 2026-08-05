@@ -1,27 +1,33 @@
 /**
- * LIVE-ONLY top-gainers scanner for GitHub Pages.
+ * Client data loader for GitHub Pages.
  *
- * Primary feed: Nasdaq.com Most Advanced + full US screener (live last + %).
- * Optional Yahoo enrich when CORS proxies work (TradingView-accurate prevClose).
- * Never depends on Yahoo for the board to stay up — that caused reconnect loops.
+ * PRIMARY (reliable): same-origin /data/live.json rebuilt every minute by
+ * GitHub Actions from live Nasdaq + Yahoo (no CORS).
+ *
+ * OPTIONAL: browser CORS-proxy upgrade. Never required for the board to work.
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 20;
-const MOVERS_TTL_MS = 8_000;
 
-type LiveSeed = {
-  symbol: string;
-  name: string;
-  price: number;
-  changePct: number;
-  volume: number;
-  dayHigh?: number;
-  dayLow?: number;
-  prevClose?: number;
-};
+export function liveJsonUrl(): string {
+  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
+  return `${base}/data/live.json?t=${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
-let moversCache: { rows: LiveSeed[]; at: number } | null = null;
+/** Same-origin Actions feed — always works on GitHub Pages. */
+export async function fetchSnapshotFeed(): Promise<ScannerPayload> {
+  const res = await fetch(liveJsonUrl(), {
+    cache: "no-store",
+    headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+  });
+  if (!res.ok) throw new Error(`Live feed unavailable (${res.status})`);
+  const data = (await res.json()) as ScannerPayload;
+  if (!data || (!data.gainers?.length && !data.premarket?.length && data.session === "regular")) {
+    // Still return payload (may be closed/premarket empty)
+  }
+  return data;
+}
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
@@ -34,26 +40,21 @@ function proxyUrls(url: string): string[] {
   return [
     `https://corsproxy.io/?${enc}`,
     `https://api.allorigins.win/raw?url=${enc}`,
-    `https://api.codetabs.com/v1/proxy?quest=${enc}`,
   ];
 }
 
-async function fetchViaProxy(url: string, timeoutMs = 6000): Promise<Response> {
+async function fetchViaProxy(url: string, timeoutMs = 3500): Promise<Response> {
   const jobs = proxyUrls(url).map((p) => {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     const promise = fetch(p, {
       cache: "no-store",
-      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
       signal: ac.signal,
     })
       .then(async (res) => {
         if (!res.ok) throw new Error(`proxy ${res.status}`);
         const text = await res.text();
-        const trimmed = text.trimStart();
-        if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
-          throw new Error("proxy HTML");
-        }
+        if (text.trimStart().startsWith("<")) throw new Error("proxy HTML");
         JSON.parse(text);
         return new Response(text, {
           status: 200,
@@ -63,11 +64,10 @@ async function fetchViaProxy(url: string, timeoutMs = 6000): Promise<Response> {
       .finally(() => clearTimeout(timer));
     return { ac, promise };
   });
-
   try {
     return await Promise.any(jobs.map((j) => j.promise));
   } catch {
-    throw new Error("All live proxies failed");
+    throw new Error("proxies failed");
   } finally {
     for (const j of jobs) j.ac.abort();
   }
@@ -86,11 +86,8 @@ function isJunk(sym: string, name = ""): boolean {
   if (/(WW|WS|WT|WR)$/.test(s)) return true;
   if (s.length >= 5 && s.endsWith("W")) return true;
   if (n.includes("warrant") || n.includes(" unit") || n.includes("right")) return true;
-  if (n.includes("preferred") || n.includes(" preference")) return true;
-  if (/\betf\b|\betn\b|leveraged|direxion|proshares|graniteshares/.test(n)) return true;
-  if (s.length >= 5 && s.endsWith("Z") && !n.includes("ordinary") && !n.includes("common")) {
-    return true;
-  }
+  if (n.includes("preferred")) return true;
+  if (/\betf\b|\betn\b|direxion|proshares/.test(n)) return true;
   return false;
 }
 
@@ -113,12 +110,22 @@ function sessionNow(): ScannerPayload["session"] {
   return "closed";
 }
 
-async function fetchMostAdvancedLive(): Promise<LiveSeed[]> {
-  const url = "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50";
-  const res = await fetchViaProxy(url, 7000);
+type Seed = {
+  symbol: string;
+  name: string;
+  price: number;
+  changePct: number;
+  volume: number;
+};
+
+async function fetchMostAdvanced(): Promise<Seed[]> {
+  const res = await fetchViaProxy(
+    "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50",
+    4000,
+  );
   const data = await res.json();
   const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
-  const out: LiveSeed[] = [];
+  const out: Seed[] = [];
   for (const r of rows) {
     if (isJunk(r.symbol, r.name)) continue;
     const changePct = parseMoney(r.change);
@@ -130,222 +137,59 @@ async function fetchMostAdvancedLive(): Promise<LiveSeed[]> {
       price,
       changePct,
       volume: parseMoney(r.volume),
-      prevClose: price / (1 + changePct / 100),
     });
   }
   return out;
 }
 
-async function fetchFullUsScreenerLive(): Promise<LiveSeed[]> {
-  const url =
-    "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true";
-  const res = await fetchViaProxy(url, 12000);
-  const data = await res.json();
-  const rows = data?.data?.rows || [];
-  return rows
-    .filter((r: { symbol: string; name: string }) => !isJunk(r.symbol, r.name))
-    .map((r: { symbol: string; name: string; lastsale: string; pctchange: string; volume: string }) => {
-      const price = parseMoney(r.lastsale);
-      const changePct = parseMoney(r.pctchange);
-      return {
-        symbol: String(r.symbol).replace("/", "-").toUpperCase(),
-        name: r.name || r.symbol,
-        price,
-        changePct,
-        volume: parseMoney(r.volume),
-        prevClose: changePct > -100 ? price / (1 + changePct / 100) : undefined,
-      } satisfies LiveSeed;
-    })
-    .filter((r: LiveSeed) => r.changePct > 0 && r.price > 0)
-    .sort((a: LiveSeed, b: LiveSeed) => b.changePct - a.changePct)
-    .slice(0, 40);
-}
-
-function mergeLive(...lists: LiveSeed[][]): LiveSeed[] {
-  const map = new Map<string, LiveSeed>();
-  // Later lists overwrite earlier (Most Advanced should win over screener)
-  for (const list of lists) {
-    for (const row of list) {
-      const prev = map.get(row.symbol);
-      if (!prev || row.changePct >= prev.changePct) {
-        map.set(row.symbol, { ...prev, ...row, volume: row.volume || prev?.volume || 0 });
-      }
-    }
-  }
-  return [...map.values()].sort((a, b) => b.changePct - a.changePct);
-}
-
-async function loadLiveMovers(): Promise<LiveSeed[]> {
-  // Prefer a very fresh movers pull; allow short in-memory reuse only to ride out a single proxy blip
-  if (moversCache && Date.now() - moversCache.at < MOVERS_TTL_MS && moversCache.rows.length >= 5) {
-    // Still try a fresh pull; fall back to this if it fails
-    try {
-      return await pullFreshMovers();
-    } catch {
-      return moversCache.rows;
-    }
-  }
-  return pullFreshMovers();
-}
-
-async function pullFreshMovers(): Promise<LiveSeed[]> {
-  const results = await Promise.allSettled([fetchMostAdvancedLive(), fetchFullUsScreenerLive()]);
-  const advanced = results[0].status === "fulfilled" ? results[0].value : [];
-  const screener = results[1].status === "fulfilled" ? results[1].value : [];
-
-  // Most Advanced wins on overlap (fresher live %)
-  const merged = mergeLive(screener, advanced);
-  if (merged.length >= 3) {
-    moversCache = { rows: merged, at: Date.now() };
-    return merged;
-  }
-  if (moversCache?.rows.length) return moversCache.rows;
-
-  const err =
-    results.find((r) => r.status === "rejected") &&
-    ((results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason as Error)
-      ?.message;
-  throw new Error(err || "Live Nasdaq movers unavailable");
-}
-
-type YahooQuote = {
-  symbol: string;
-  last: number;
-  prevClose: number;
-  dayHigh: number;
-  dayLow: number;
-  volume: number;
-  dayChangePct: number;
-};
-
-async function fetchYahooQuote(symbol: string): Promise<YahooQuote | null> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`;
-  const res = await fetchViaProxy(url, 4000);
-  const data = await res.json();
-  const meta = data?.chart?.result?.[0]?.meta;
-  const quote = data?.chart?.result?.[0]?.indicators?.quote?.[0] || {};
-  if (!meta) return null;
-  const highs = (quote.high || []).filter((n: number | null) => n != null) as number[];
-  const lows = (quote.low || []).filter((n: number | null) => n != null) as number[];
-  const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
-  const last = Number(meta.regularMarketPrice) || 0;
-  if (!(last > 0) || !(prevClose > 0)) return null;
-  const metaHigh = Number(meta.regularMarketDayHigh) || 0;
-  const metaLow = Number(meta.regularMarketDayLow) || 0;
-  const dayHigh = Math.max(last, metaHigh, ...(highs.length ? highs : [0]));
-  const dayLow =
-    lows.length || metaLow
-      ? Math.min(last, metaLow || last, ...(lows.length ? lows : [last]))
-      : last;
-  return {
-    symbol,
-    last,
-    prevClose,
-    dayHigh,
-    dayLow,
-    volume: Number(meta.regularMarketVolume) || 0,
-    dayChangePct: ((last - prevClose) / prevClose) * 100,
-  };
-}
-
-async function mapPool<T, R>(items: T[], concurrency: number, fn: (t: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    out.push(...(await Promise.all(items.slice(i, i + concurrency).map(fn))));
-  }
-  return out;
-}
-
-function seedToMover(seed: LiveSeed, y?: YahooQuote | null): StockMover {
-  // Prefer Yahoo when available (matches TradingView). Else Nasdaq live last+% together.
-  const price = y?.last && y.last > 0 ? y.last : seed.price;
-  const prevClose =
-    y?.prevClose && y.prevClose > 0
-      ? y.prevClose
-      : seed.prevClose && seed.prevClose > 0
-        ? seed.prevClose
-        : price / (1 + seed.changePct / 100);
-  const changePct = y ? ((price - prevClose) / prevClose) * 100 : seed.changePct;
-  const dayHigh = y?.dayHigh && y.dayHigh > 0 ? Math.max(y.dayHigh, price) : Math.max(seed.dayHigh || 0, price);
-  const dayLow = y?.dayLow && y.dayLow > 0 ? y.dayLow : seed.dayLow || price;
-  const volume = y?.volume && y.volume > 0 ? y.volume : seed.volume || 0;
-  const hodDistancePct = dayHigh > 0 ? ((dayHigh - price) / dayHigh) * 100 : 0;
-
+function toMover(seed: Seed): StockMover {
+  const prevClose = seed.price / (1 + seed.changePct / 100);
   return {
     symbol: seed.symbol,
     name: seed.name,
-    price,
-    changePct,
-    change: price - prevClose,
-    volume,
-    dayHigh,
-    dayLow,
+    price: seed.price,
+    changePct: seed.changePct,
+    change: seed.price - prevClose,
+    volume: seed.volume,
+    dayHigh: seed.price,
+    dayLow: seed.price,
     prevClose,
     floatMillions: null,
-    hodDistancePct,
-    hodGainPct: prevClose > 0 ? ((dayHigh - prevClose) / prevClose) * 100 : changePct,
-    atHod: hodDistancePct <= 2,
+    hodDistancePct: 0,
+    hodGainPct: seed.changePct,
+    atHod: true,
     updatedAt: new Date().toISOString(),
   };
 }
 
-function topGainers(rows: StockMover[]): StockMover[] {
-  return [...rows]
-    .filter((m) => m.changePct > 0 && m.price > 0)
-    .sort((a, b) => b.changePct - a.changePct)
-    .slice(0, FEED_LIMIT);
-}
-
-/** Live scan — Nasdaq movers always sufficient; Yahoo is optional enrich. */
+/**
+ * Optional browser-side Nasdaq Most Advanced upgrade.
+ * Safe to fail — caller must keep the Actions feed.
+ */
 export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   const session = sessionNow();
-  const seeds = await loadLiveMovers();
-  if (!seeds.length) throw new Error("Live Nasdaq movers returned no US gainers");
+  const seeds = await fetchMostAdvanced();
+  if (seeds.length < 3) throw new Error("Live movers thin");
 
-  const head = seeds.slice(0, FEED_LIMIT);
-  // Best-effort Yahoo enrich (do not fail the tick if proxies flake)
-  const yahoo = await mapPool(head.slice(0, 12), 4, async (s) => {
-    try {
-      return await fetchYahooQuote(s.symbol);
-    } catch {
-      return null;
-    }
-  });
-  const yMap = new Map(
-    yahoo.filter(Boolean).map((q) => [q!.symbol, q!] as const),
-  );
-
-  const rows = head.map((s) => seedToMover(s, yMap.get(s.symbol) ?? null));
-  const ranked = topGainers(rows);
-
-  let premarket: StockMover[] = [];
-  let gainers: StockMover[] = [];
-
-  if (session === "premarket") {
-    premarket = ranked;
-  } else if (session !== "closed") {
-    gainers = ranked;
-    premarket = ranked; // gap panel uses same live leaders until dedicated gap feed
-  }
-
-  if (session !== "premarket" && session !== "closed" && !gainers.length) {
-    throw new Error("No live top gainers");
-  }
+  const ranked = [...seeds]
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, FEED_LIMIT)
+    .map(toMover);
 
   const news: NewsItem[] = [];
-
   return {
     session,
     updatedAt: new Date().toISOString(),
     source: "full-us-realtime",
     feedLimit: FEED_LIMIT,
     news,
-    premarket,
-    gainers,
+    premarket: session === "premarket" ? ranked : ranked,
+    gainers: session === "premarket" || session === "closed" ? [] : ranked,
   };
 }
 
-export function liveJsonUrl(): string {
-  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
-  return `${base}/data/live.json?t=${Date.now()}`;
+export function rowSynced(m: { price: number; prevClose: number; changePct: number }): boolean {
+  if (!(m.price > 0) || !(m.prevClose > 0) || !Number.isFinite(m.changePct)) return false;
+  const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
+  return Math.abs(recomputed - m.changePct) < 1.5;
 }
