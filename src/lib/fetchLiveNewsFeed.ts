@@ -1,8 +1,8 @@
 /**
- * Live quote enrichment for news ticker tiles (STOCK_SCANNER_APP_MEMORY.md).
- * Soft-fail — used only by the News tab poll.
+ * Live news poll for the News tab (STOCK_SCANNER_APP_MEMORY.md).
+ * Progressive: quick sources first, then full registry. Soft-fail.
  */
-import { enrichNewsWithQuotes, fetchLiveNews } from "@/lib/liveNews";
+import { enrichNewsWithQuotes, fetchLiveNews, fetchLiveNewsQuick } from "@/lib/liveNews";
 import type { NewsItem } from "@/lib/types";
 
 function bust(url: string): string {
@@ -25,7 +25,7 @@ async function fetchJson(url: string): Promise<unknown> {
       const res = await fetch(b(enc), {
         cache: "no-store",
         headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(6000),
       });
       if (!res.ok) {
         lastErr = new Error(`proxy ${res.status}`);
@@ -73,23 +73,30 @@ async function sparkQuotes(
   return out;
 }
 
-/** Full live news poll: all registered sources + live quote tiles. No cache/filler. */
-export async function fetchLiveNewsFeed(): Promise<NewsItem[]> {
-  const raw = await fetchLiveNews(100);
+async function withQuotes(raw: NewsItem[]): Promise<NewsItem[]> {
   const tickers = [
     ...new Set(raw.flatMap((n) => n.tickers).map((t) => t.toUpperCase()).filter(Boolean)),
   ];
   if (!tickers.length) return enrichNewsWithQuotes(raw, new Map());
-
   try {
     const quotes = await Promise.race([
       sparkQuotes(tickers),
       new Promise<Map<string, { last: number; changePct: number }>>((resolve) =>
-        setTimeout(() => resolve(new Map()), 8000),
+        setTimeout(() => resolve(new Map()), 5000),
       ),
     ]);
     return enrichNewsWithQuotes(raw, quotes);
   } catch {
     return enrichNewsWithQuotes(raw, new Map());
   }
+}
+
+/** Fast first paint — do not block the News tab on the full registry. */
+export async function fetchLiveNewsFeedQuick(): Promise<NewsItem[]> {
+  return withQuotes(await fetchLiveNewsQuick(100));
+}
+
+/** Full multi-source scan (deadline-capped inside fetchLiveNews). */
+export async function fetchLiveNewsFeed(): Promise<NewsItem[]> {
+  return withQuotes(await fetchLiveNews(100));
 }

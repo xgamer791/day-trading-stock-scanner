@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, StockTable } from "@/components/Panels";
 import { ScannerHeader, type ScannerTab } from "@/components/ScannerHeader";
-import { fetchLiveNewsFeed } from "@/lib/fetchLiveNewsFeed";
+import { fetchLiveNewsFeed, fetchLiveNewsFeedQuick } from "@/lib/fetchLiveNewsFeed";
 import { fetchLiveScannerClient } from "@/lib/liveClient";
 import { getMarketSession } from "@/lib/market";
 import type { MarketSession, NewsItem, ScannerPayload } from "@/lib/types";
@@ -68,22 +68,37 @@ export function ScannerBoard() {
     };
   }, []);
 
-  // Live news: collect today's breaking headlines (newest→oldest). Soft-fail only.
+  // Live news: quick paint first, then deepen from full source registry.
   useEffect(() => {
     let cancelled = false;
 
     const tickNews = async () => {
       if (newsInFlight.current) return;
       newsInFlight.current = true;
-      if (newsRef.current.length === 0) setNewsLoading(true);
+      const empty = newsRef.current.length === 0;
+      if (empty) setNewsLoading(true);
+
       try {
-        const items = await fetchLiveNewsFeed();
+        // Phase 1 — fast sources so we never stick on Loading…
+        try {
+          const quick = await fetchLiveNewsFeedQuick();
+          if (cancelled) return;
+          if (quick.length) {
+            setNews(quick);
+            setNewsError(null);
+            setNewsLoading(false);
+          }
+        } catch {
+          /* fall through to full scan */
+        }
+
+        // Phase 2 — all registered sources (hard deadline inside fetchLiveNews)
+        const full = await fetchLiveNewsFeed();
         if (cancelled) return;
-        setNews(items);
+        setNews(full);
         setNewsError(null);
       } catch (err) {
         if (cancelled) return;
-        // Keep prior live rows if a refresh fails; only clear when we never had any.
         if (newsRef.current.length === 0) {
           setNews([]);
           setNewsError(err instanceof Error ? err.message : "Live news unavailable");

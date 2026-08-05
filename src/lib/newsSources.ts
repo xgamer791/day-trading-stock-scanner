@@ -169,6 +169,22 @@ export function getEnabledNewsSources(): NewsSource[] {
   return [...RSS_NEWS_SOURCES, ...YAHOO_SEARCH_SOURCES].filter((s) => s.enabled !== false);
 }
 
+/** First-paint sources — must return fast so News isn’t stuck on loading. */
+export const QUICK_NEWS_SOURCE_IDS = [
+  "gn-stocks-1d",
+  "gn-stock-market-1d",
+  "cnbc-finance",
+  "ys-market-today",
+  "ys-breaking",
+  "ys-earnings",
+  "yahoo-rssindex",
+] as const;
+
+export function getQuickNewsSources(): NewsSource[] {
+  const want = new Set<string>(QUICK_NEWS_SOURCE_IDS);
+  return getEnabledNewsSources().filter((s) => want.has(s.id));
+}
+
 /** Build yahoo-search sources for live day_gainer tickers (extra breaking coverage). */
 export function tickerNewsSources(symbols: string[]): NewsSource[] {
   return symbols.slice(0, 40).map((sym) => ({
