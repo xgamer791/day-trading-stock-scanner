@@ -13,10 +13,12 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createYahooSession, fetchFloatMillions } from "./yahoo-float.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 const OUT = path.join(ROOT, "public", "data", "live.json");
+const FLOATS_OUT = path.join(ROOT, "public", "data", "floats.json");
 const FEED_LIMIT = 50;
 
 const UA =
@@ -234,7 +236,7 @@ function mergeUniverse(screener, advanced) {
   return [...bySym.values()].sort((a, b) => b.changePct - a.changePct);
 }
 
-function toMover(seed, q = null, pctOverride = null) {
+function toMover(seed, q = null, pctOverride = null, floatMillions = null) {
   const price = q?.last > 0 ? q.last : seed.price;
   const prevClose =
     q?.prevClose > 0
@@ -261,6 +263,13 @@ function toMover(seed, q = null, pctOverride = null) {
   const hodGainPct =
     prevClose > 0 ? ((dayHigh - prevClose) / prevClose) * 100 : changePct;
 
+  const float =
+    floatMillions != null && Number.isFinite(floatMillions)
+      ? floatMillions
+      : seed.floatMillions != null && Number.isFinite(seed.floatMillions)
+        ? seed.floatMillions
+        : null;
+
   return {
     symbol: seed.symbol,
     name: q?.name || seed.name,
@@ -271,12 +280,72 @@ function toMover(seed, q = null, pctOverride = null) {
     dayHigh,
     dayLow,
     prevClose,
-    floatMillions: null,
+    floatMillions: float,
     hodDistancePct,
     hodGainPct,
     atHod: hodDistancePct <= 2,
     updatedAt: new Date().toISOString(),
   };
+}
+
+async function loadFloatMap() {
+  try {
+    const prev = JSON.parse(await readFile(FLOATS_OUT, "utf8"));
+    const floats = prev?.floats && typeof prev.floats === "object" ? prev.floats : {};
+    return new Map(
+      Object.entries(floats)
+        .map(([k, v]) => [String(k).toUpperCase(), Number(v)])
+        .filter(([, v]) => Number.isFinite(v) && v > 0),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+async function saveFloatMap(map) {
+  const floats = Object.fromEntries(
+    [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])),
+  );
+  await mkdir(path.dirname(FLOATS_OUT), { recursive: true });
+  await writeFile(
+    FLOATS_OUT,
+    JSON.stringify(
+      {
+        updatedAt: new Date().toISOString(),
+        source: "yahoo-floatShares",
+        note: "Public float in millions (Yahoo defaultKeyStatistics.floatShares / 1e6). Not shares outstanding.",
+        floats,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+/** Refresh Yahoo floatShares for symbols; merge into persistent floats.json. */
+async function enrichFloats(symbols) {
+  const map = await loadFloatMap();
+  const need = [...new Set(symbols.map((s) => String(s || "").toUpperCase()).filter(Boolean))].filter(
+    (s) => !map.has(s),
+  );
+  // Re-fetch a slice of known symbols too so floats stay current after offerings/unlocks.
+  const refresh = [...new Set(symbols.map((s) => String(s || "").toUpperCase()).filter(Boolean))]
+    .filter((s) => map.has(s))
+    .slice(0, 25);
+  const targets = [...new Set([...need, ...refresh])];
+  if (!targets.length) return map;
+
+  try {
+    const session = await createYahooSession();
+    const fresh = await fetchFloatMillions(targets, session);
+    for (const [sym, m] of fresh) map.set(sym, m);
+    await saveFloatMap(map);
+    console.log(`Floats: fetched ${fresh.size}/${targets.length} (map size ${map.size})`);
+  } catch (e) {
+    console.warn(`Floats: Yahoo floatShares failed (${e.message || e}) — keeping prior map`);
+    if (map.size) await saveFloatMap(map);
+  }
+  return map;
 }
 
 function topGainers(rows, limit = FEED_LIMIT) {
@@ -321,7 +390,15 @@ async function main() {
 
   // Discover from full US screener, then re-rank on live last vs prevClose
   const candidates = merged.slice(0, 80);
-  const quotes = await fetchLiveQuotes(candidates.map((c) => c.symbol));
+  const [quotes, floatMap] = await Promise.all([
+    fetchLiveQuotes(candidates.map((c) => c.symbol)),
+    enrichFloats(candidates.map((c) => c.symbol)),
+  ]);
+
+  const floatOf = (sym) => {
+    const v = floatMap.get(String(sym).toUpperCase());
+    return v != null && Number.isFinite(v) ? v : null;
+  };
 
   let premarket = [];
   let gainers = [];
@@ -329,7 +406,7 @@ async function main() {
   if (session === "premarket") {
     const rows = candidates.map((seed) => {
       const q = quotes.get(seed.symbol);
-      if (!q) return toMover(seed, null);
+      if (!q) return toMover(seed, null, null, floatOf(seed.symbol));
       const price = q.prePrice != null ? q.prePrice : q.last;
       const pct =
         q.prePct != null
@@ -337,7 +414,7 @@ async function main() {
           : q.prevClose > 0
             ? ((price - q.prevClose) / q.prevClose) * 100
             : seed.changePct;
-      return toMover(seed, { ...q, last: price }, pct);
+      return toMover(seed, { ...q, last: price }, pct, floatOf(seed.symbol));
     });
     premarket = topGainers(rows);
     gainers = [];
@@ -346,13 +423,15 @@ async function main() {
     gainers = [];
   } else {
     // Regular / after-hours: rank by live (last - prevClose) / prevClose
-    const rows = candidates.map((seed) => toMover(seed, quotes.get(seed.symbol) || null));
+    const rows = candidates.map((seed) =>
+      toMover(seed, quotes.get(seed.symbol) || null, null, floatOf(seed.symbol)),
+    );
     gainers = topGainers(rows);
 
     const gaps = candidates.map((seed) => {
       const q = quotes.get(seed.symbol);
-      if (!q) return toMover(seed, null);
-      return toMover(seed, q, q.gapPct);
+      if (!q) return toMover(seed, null, null, floatOf(seed.symbol));
+      return toMover(seed, q, q.gapPct, floatOf(seed.symbol));
     });
     premarket = topGainers(gaps);
   }

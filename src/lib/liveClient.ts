@@ -6,14 +6,17 @@
  *  2) Yahoo day_gainers (up to 100) — last + prevClose from SAME payload
  *  3) Yahoo spark ONLY for Most Advanced symbols missing from day_gainers
  *  4) Rank by same-quote % — top 50
+ *  5) Attach float (Yahoo floatShares → millions) — fundamentals, not price/%
  *
  * Do NOT multi-batch spark 100+ symbols or download the 10k screener every tick —
  * that rate-limits CORS proxies and surfaces "Live Yahoo spark failed".
- * NEVER reads live.json for mover rows.
+ * NEVER reads live.json for mover price/%Chg/volume rows.
+ * floats.json is allowed for the Flt column only (Yahoo public float, not a price cache).
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
+const FLOAT_FILE_REFRESH_MS = 30_000;
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
@@ -31,7 +34,7 @@ function proxyUrls(url: string): string[] {
 }
 
 /** Sequential proxies — racing all three every 3s burns quota and dies ~20s in. */
-async function fetchViaProxy(url: string, timeoutMs = 7000): Promise<unknown> {
+async function fetchTextViaProxy(url: string, timeoutMs = 7000): Promise<string> {
   let lastErr: Error | null = null;
   for (const p of proxyUrls(url)) {
     try {
@@ -49,12 +52,104 @@ async function fetchViaProxy(url: string, timeoutMs = 7000): Promise<unknown> {
         lastErr = new Error("proxy HTML");
         continue;
       }
-      return JSON.parse(text);
+      return text;
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
     }
   }
   throw lastErr || new Error("All live proxies failed");
+}
+
+async function fetchViaProxy(url: string, timeoutMs = 7000): Promise<unknown> {
+  return JSON.parse(await fetchTextViaProxy(url, timeoutMs));
+}
+
+/** In-memory Yahoo floatShares (millions). Fundamentals — not used as live price/%. */
+const floatCache = new Map<string, number>();
+let floatFileAt = 0;
+let yahooCrumb: string | null = null;
+let yahooCrumbAt = 0;
+
+function floatsJsonUrl(): string {
+  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
+  return `${base}/data/floats.json?t=${Date.now()}`;
+}
+
+async function refreshFloatFile(): Promise<void> {
+  if (Date.now() - floatFileAt < FLOAT_FILE_REFRESH_MS && floatCache.size) return;
+  try {
+    const res = await fetch(floatsJsonUrl(), {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { floats?: Record<string, number> };
+    const floats = data?.floats || {};
+    for (const [sym, v] of Object.entries(floats)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) floatCache.set(String(sym).toUpperCase(), n);
+    }
+    floatFileAt = Date.now();
+  } catch {
+    /* floats file optional until Actions publishes it */
+  }
+}
+
+async function ensureYahooCrumb(): Promise<string | null> {
+  if (yahooCrumb && Date.now() - yahooCrumbAt < 10 * 60_000) return yahooCrumb;
+  try {
+    // Seed cookies on the proxy hop (best-effort; some proxies strip Set-Cookie).
+    await fetchTextViaProxy("https://fc.yahoo.com", 5000).catch(() => "");
+    const crumb = (await fetchTextViaProxy("https://query2.finance.yahoo.com/v1/test/getcrumb", 6000)).trim();
+    if (!crumb || crumb.length > 40 || crumb.includes("<") || crumb.includes("{")) {
+      return null;
+    }
+    yahooCrumb = crumb;
+    yahooCrumbAt = Date.now();
+    return crumb;
+  } catch {
+    yahooCrumb = null;
+    return null;
+  }
+}
+
+/** Live Yahoo floatShares for symbols missing from floats.json (max few per poll). */
+async function fetchMissingFloats(symbols: string[]): Promise<void> {
+  const need = [...new Set(symbols.map((s) => s.toUpperCase()))].filter((s) => !floatCache.has(s)).slice(0, 8);
+  if (!need.length) return;
+
+  const crumb = await ensureYahooCrumb();
+  if (!crumb) return;
+
+  await Promise.all(
+    need.map(async (sym) => {
+      try {
+        const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
+          sym,
+        )}?modules=defaultKeyStatistics&crumb=${encodeURIComponent(crumb)}`;
+        const data = (await fetchViaProxy(url, 7000)) as {
+          quoteSummary?: {
+            result?: Array<{ defaultKeyStatistics?: { floatShares?: { raw?: number } | number } }>;
+          };
+        };
+        const fs = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics?.floatShares;
+        const raw = typeof fs === "object" && fs ? Number(fs.raw) : Number(fs);
+        if (Number.isFinite(raw) && raw > 0) floatCache.set(sym, raw / 1_000_000);
+      } catch {
+        /* keep empty for this symbol */
+      }
+    }),
+  );
+}
+
+async function attachFloats(movers: StockMover[]): Promise<StockMover[]> {
+  await refreshFloatFile();
+  await fetchMissingFloats(movers.map((m) => m.symbol));
+  return movers.map((m) => ({
+    ...m,
+    floatMillions: floatCache.get(m.symbol.toUpperCase()) ?? m.floatMillions ?? null,
+  }));
 }
 
 function parseMoney(v: unknown): number {
@@ -301,7 +396,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     throw yahooErr || advancedErr || new Error("Live Yahoo spark failed");
   }
 
-  const movers = [...quotes.values()]
+  const ranked = [...quotes.values()]
     .map(toMover)
     .filter((m) => {
       const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
@@ -309,6 +404,9 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     })
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, FEED_LIMIT);
+
+  // Float is Yahoo public floatShares (millions). Never substitute shares outstanding.
+  const movers = await attachFloats(ranked);
 
   if (session !== "premarket" && session !== "closed" && movers.length < 3) {
     throw new Error(`Live quotes unavailable (${movers.length})`);
