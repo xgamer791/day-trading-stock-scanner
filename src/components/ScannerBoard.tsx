@@ -120,7 +120,7 @@ export function ScannerBoard() {
               Top Gainers
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-              Live API only · Top 20 · Entire US market · 5s poll
+              Live API only · Top 20 · Entire US market · 3s poll
             </div>
           </div>
           <SessionBadge session={session} />
