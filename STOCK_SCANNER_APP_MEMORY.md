@@ -101,12 +101,13 @@ Related failure (~20s “list randomly switches to a completely different board�
 
 ---
 
-## Stack notes
+## News sources (News tab)
 
-- Next.js static export (`output: "export"`), `basePath` `/day-trading-stock-scanner` when `GITHUB_PAGES=true`.
-- Deploy: `.github/workflows/deploy-pages.yml`.
-- `scripts/fetch-live.mjs` may still build `live.json` / `floats.json` for offline/debug/build — **the client live UI must not depend on them for gainers/premarket/Flt.**
-- `scripts/verify-flt.mjs` — run after Flt changes (direct APIs). Still verify the live Pages URL.
+- Source registry: `src/lib/newsSources.ts` — **reuse / extend this file** for future news scans.
+- Includes Google News RSS (today), Yahoo Finance search + RSS, CNBC, Investing.com, MarketWatch, plus per–day_gainer ticker Yahoo searches.
+- Live fetch: `src/lib/liveNews.ts` + `src/lib/fetchLiveNewsFeed.ts` — newest→oldest ≤100, **no** news TTL cache / live.json / filler.
+- Soft-fail: news must never kill the gainers poll.
+
 
 ---
 

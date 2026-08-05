@@ -73,17 +73,23 @@ async function sparkQuotes(
   return out;
 }
 
-/** Full live news poll: fresh headlines + live quote tiles. No cache/filler. */
+/** Full live news poll: all registered sources + live quote tiles. No cache/filler. */
 export async function fetchLiveNewsFeed(): Promise<NewsItem[]> {
   const raw = await fetchLiveNews(100);
   const tickers = [
     ...new Set(raw.flatMap((n) => n.tickers).map((t) => t.toUpperCase()).filter(Boolean)),
   ];
-  let quotes = new Map<string, { last: number; changePct: number }>();
+  if (!tickers.length) return enrichNewsWithQuotes(raw, new Map());
+
   try {
-    quotes = await sparkQuotes(tickers);
+    const quotes = await Promise.race([
+      sparkQuotes(tickers),
+      new Promise<Map<string, { last: number; changePct: number }>>((resolve) =>
+        setTimeout(() => resolve(new Map()), 8000),
+      ),
+    ]);
+    return enrichNewsWithQuotes(raw, quotes);
   } catch {
-    /* headlines still valid without quotes */
+    return enrichNewsWithQuotes(raw, new Map());
   }
-  return enrichNewsWithQuotes(raw, quotes);
 }

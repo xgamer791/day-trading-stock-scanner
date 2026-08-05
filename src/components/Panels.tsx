@@ -54,16 +54,16 @@ export function PanelHeader({
   );
 }
 
-export function NewsFeed({ items }: { items: NewsItem[] }) {
+export function NewsFeed({ items, loading = false }: { items: NewsItem[]; loading?: boolean }) {
   return (
     <div className="news6" role="feed" aria-label="Live market news">
       <div className="news6__titlebar">
         <span className="news6__title">NEWS SCANNER</span>
-        <span className="news6__count">{items.length}</span>
+        <span className="news6__count">{loading && !items.length ? "…" : items.length}</span>
       </div>
       <div className="news6__list">
         {items.map((item, idx) => {
-          const sym = (item.tickers[0] || "—").toUpperCase();
+          const sym = (item.tickers[0] || "NEWS").toUpperCase();
           const up = (item.changePct ?? 0) >= 0;
           const hasQuote = item.price != null && Number.isFinite(item.price);
           return (
@@ -75,11 +75,7 @@ export function NewsFeed({ items }: { items: NewsItem[] }) {
               className="news6__row"
               style={{ animationDelay: `${Math.min(idx, 12) * 20}ms` }}
             >
-              <span
-                className="news6__ticker"
-                style={{ background: tickerColor(sym) }}
-                aria-hidden={sym === "—"}
-              >
+              <span className="news6__ticker" style={{ background: tickerColor(sym) }}>
                 {sym.slice(0, 5)}
               </span>
               <span className="news6__headline">{item.title}</span>
@@ -99,7 +95,8 @@ export function NewsFeed({ items }: { items: NewsItem[] }) {
             </a>
           );
         })}
-        {items.length === 0 && <EmptyState text="Waiting for live news…" />}
+        {loading && items.length === 0 && <EmptyState text="Loading live news…" />}
+        {!loading && items.length === 0 && <EmptyState text="No live headlines right now" />}
       </div>
     </div>
   );
