@@ -1,59 +1,52 @@
-# Day Trading Stock Scanner
+# HOD Scanner
 
-A real-time and pre-market stock scanner for day traders. Finds high-relative-volume movers, gap plays, and breakout candidates with configurable filters.
+Real-time day trading stock scanner focused on **high-of-day (HOD) peaking** stocks — the ones hitting session highs right now.
 
-## Features
+Inspired by [Realtime Stock Screener](https://apps.apple.com/us/app/realtime-stock-screener/id1563483991).
 
-- **Premarket / opening-range scans** — gap %, relative volume, float, price range
-- **Intraday momentum** — RVOL spikes, VWAP reclaim/reject, breakout levels
-- **Watchlist output** — ranked candidates with why they fired
-- **Configurable filters** — YAML/CLI overrides for your trading style
-- **Extensible data providers** — swap in Polygon, Alpaca, or other market data APIs
+## Layout
 
-> Not financial advice. For research and education only. Markets involve risk of loss.
+| Panel | Content |
+|-------|---------|
+| **Left** | Breaking / most recent news |
+| **Center** | Premarket HOD gainers |
+| **Right** | Market top gainers at HOD |
 
-## Quick start
+Only stocks within **0.35% of day high** and green on the day are listed.
+
+## Stack
+
+- Next.js (App Router) + TypeScript
+- Polygon.io snapshots + news (live)
+- Server-Sent Events stream (~2.5s refresh)
+- Demo mode when no API key is set
+
+## Setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Copy env template and add API keys when ready
-cp .env.example .env
-
-# Run a sample scan (demo data if no provider key is set)
-python -m scanner --config config/default.yaml
+npm install
+cp .env.example .env.local
+# Add POLYGON_API_KEY=... for live data
+npm run dev
 ```
 
-## Project layout
+Open [http://localhost:3000](http://localhost:3000).
 
-```
-src/scanner/     # Core scanner package
-config/          # Scan profiles and filters
-tests/           # Unit tests
-data/            # Local cache / sample fixtures (gitignored except samples)
-```
+## Data accuracy
 
-## Configuration
+Live mode uses Polygon US stock **gainers snapshots** and **reference news**. For production day trading, use a Polygon plan with real-time (not delayed) entitlements.
 
-Edit `config/default.yaml` to tune:
+Without `POLYGON_API_KEY`, the UI runs on rotating demo data so you can still verify layout and HOD filters.
 
-| Filter | Default | Notes |
-|--------|---------|--------|
-| `min_price` / `max_price` | 2 / 50 | Typical day-trade range |
-| `min_rel_volume` | 2.0 | Relative to average volume |
-| `min_gap_pct` | 3.0 | Premarket gap threshold |
-| `min_avg_volume` | 500000 | Liquidity floor |
+## Scripts
 
-## Roadmap
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Local development |
+| `npm run build` | Production build |
+| `npm start` | Serve production build |
+| `npm test` | Unit tests for HOD filters |
 
-- [ ] Live websocket quotes
-- [ ] News / catalyst tagging
-- [ ] Discord / Telegram alerts
-- [ ] Backtest harness for scan rules
-- [ ] Web dashboard
+## Disclaimer
 
-## License
-
-MIT
+Not financial advice. For research and education only.

@@ -1,0 +1,137 @@
+:root {
+  --bg: #0b0d10;
+  --bg-panel: #11151b;
+  --bg-row: #151a22;
+  --bg-row-hover: #1a212c;
+  --border: #232a35;
+  --border-strong: #2f3846;
+  --text: #e8edf4;
+  --text-dim: #8b96a8;
+  --text-faint: #5c6778;
+  --green: #16c784;
+  --green-dim: rgba(22, 199, 132, 0.12);
+  --red: #ea3943;
+  --red-dim: rgba(234, 57, 67, 0.12);
+  --amber: #f5a524;
+  --accent: #3d8bfd;
+  --hod: #00e5a8;
+  --font-sans: "Satoshi", sans-serif;
+  --font-display: "Clash Grotesk", "Satoshi", sans-serif;
+  --font-mono: "Kode Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(61, 139, 253, 0.07), transparent),
+    linear-gradient(180deg, #0b0d10 0%, #0e1218 100%);
+}
+
+button {
+  font-family: inherit;
+  border-radius: 0;
+}
+
+a {
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+.scanner-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 1.05fr) minmax(320px, 1.2fr) minmax(320px, 1.2fr);
+  min-height: 0;
+}
+
+.mobile-tabs {
+  display: none;
+  grid-template-columns: 1fr 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (max-width: 960px) {
+  .scanner-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mobile-tabs {
+    display: grid;
+  }
+
+  .mobile-hide {
+    display: none !important;
+  }
+
+  .mobile-show {
+    display: flex !important;
+  }
+}
+
+@keyframes pulse-live {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes flash-up {
+  0% {
+    background-color: var(--green-dim);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.live-dot {
+  animation: pulse-live 1.4s ease-in-out infinite;
+}
+
+.row-flash {
+  animation: flash-up 0.8s ease-out;
+}
+
+.panel-enter {
+  animation: slide-in 0.35s ease-out both;
+}
