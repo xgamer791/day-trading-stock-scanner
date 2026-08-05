@@ -21,6 +21,12 @@ Only stocks within **0.35% of day high** and green on the day are listed.
 - Server-Sent Events stream (~2.5s refresh)
 - Demo mode when no API key is set
 
+## Live
+
+**https://xgamer791.github.io/day-trading-stock-scanner/**
+
+Deployed automatically to GitHub Pages on every push to `main`.
+
 ## Setup
 
 ```bash

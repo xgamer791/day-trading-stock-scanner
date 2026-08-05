@@ -2,27 +2,58 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
+import { getDemoScanner } from "@/lib/demo";
 import type { ScannerPayload } from "@/lib/types";
 
-export function ScannerBoard({ initial }: { initial: ScannerPayload }) {
-  const [data, setData] = useState<ScannerPayload>(initial);
+async function loadScanner(): Promise<ScannerPayload> {
+  const key = process.env.NEXT_PUBLIC_POLYGON_API_KEY;
+  if (!key) return getDemoScanner();
+
+  try {
+    const [newsRes, gainersRes] = await Promise.all([
+      fetch(
+        `https://api.polygon.io/v2/reference/news?limit=40&order=desc&sort=published_utc&apiKey=${key}`,
+      ),
+      fetch(
+        `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/gainers?apiKey=${key}`,
+      ),
+    ]);
+
+    if (!newsRes.ok || !gainersRes.ok) return getDemoScanner();
+
+    // Fall back to demo shaping if live parse fails — keep UI alive
+    const { buildFromPolygon } = await import("@/lib/clientPolygon");
+    return buildFromPolygon(await newsRes.json(), await gainersRes.json());
+  } catch {
+    return getDemoScanner();
+  }
+}
+
+export function ScannerBoard() {
+  const [data, setData] = useState<ScannerPayload>(() => getDemoScanner());
   const [connected, setConnected] = useState(false);
   const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("pre");
 
   useEffect(() => {
-    const es = new EventSource("/api/stream");
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
-    es.onmessage = (ev) => {
+    let cancelled = false;
+
+    const tick = async () => {
       try {
-        const payload = JSON.parse(ev.data) as ScannerPayload;
+        const payload = await loadScanner();
+        if (cancelled) return;
         setData(payload);
         setConnected(true);
       } catch {
-        /* ignore malformed */
+        if (!cancelled) setConnected(false);
       }
     };
-    return () => es.close();
+
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   const updatedLabel = data.updatedAt
