@@ -12,6 +12,6 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # App-specific agent rules (mandatory)
 
-**Before any edit to this repository, read `APP_MEMORY.md` in full.**
+**Before any edit to this repository, read `STOCK_SCANNER_APP_MEMORY.md` in full.** (Stock scanner only — not for other apps.)
 
 Hard must from that file: **ZERO CACHING IN LIVE FEED** — live gainers/premarket must come from live API polls only; never display `live.json` / snapshot / last-tick fallback as the live feed.

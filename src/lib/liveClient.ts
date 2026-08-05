@@ -1,5 +1,5 @@
 /**
- * LIVE-ONLY client feed (APP_MEMORY.md — read before every edit).
+ * LIVE-ONLY client feed (STOCK_SCANNER_APP_MEMORY.md — read before every edit).
  *
  * Every ~3s poll (no mover-row cache):
  *  1) Nasdaq Most Advanced (discovery only — never the ranked board alone)
@@ -34,7 +34,7 @@ const PROXY_BUILDERS: Array<(enc: string) => string> = [
   (enc) => `https://api.codetabs.com/v1/proxy?quest=${enc}`,
 ];
 
-/** Sticky transport preference only — not quote/float data (APP_MEMORY allowed). */
+/** Sticky transport preference only — not quote/float data (STOCK_SCANNER_APP_MEMORY allowed). */
 let preferredProxy = 0;
 
 function proxyUrls(url: string): string[] {
@@ -468,13 +468,13 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   };
 }
 
-/** @deprecated Do not use for live gainers UI — violates APP_MEMORY.md */
+/** @deprecated Do not use for live gainers UI — violates STOCK_SCANNER_APP_MEMORY.md */
 export function liveJsonUrl(): string {
   const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
   return `${base}/data/live.json?t=${Date.now()}`;
 }
 
-/** @deprecated Do not use for live gainers UI — violates APP_MEMORY.md */
+/** @deprecated Do not use for live gainers UI — violates STOCK_SCANNER_APP_MEMORY.md */
 export async function fetchSnapshotFeed(): Promise<ScannerPayload> {
-  throw new Error("Snapshot feed disabled — live API only (APP_MEMORY.md)");
+  throw new Error("Snapshot feed disabled — live API only (STOCK_SCANNER_APP_MEMORY.md)");
 }

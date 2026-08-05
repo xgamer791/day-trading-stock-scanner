@@ -8,7 +8,7 @@ Inspired by [Realtime Stock Screener](https://apps.apple.com/us/app/realtime-sto
 
 **https://xgamer791.github.io/day-trading-stock-scanner/**
 
-Auto-deploys on every push to `main`. The browser polls **live Nasdaq + Yahoo spark** every **3 seconds**. `live.json` is build/debug only — **not** used for the on-screen live feed (`APP_MEMORY.md`).
+Auto-deploys on every push to `main`. The browser polls **live Nasdaq + Yahoo spark** every **3 seconds**. `live.json` is build/debug only — **not** used for the on-screen live feed (`STOCK_SCANNER_APP_MEMORY.md`).
 
 ## Layout
 

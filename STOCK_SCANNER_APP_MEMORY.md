@@ -1,6 +1,8 @@
 # Day Trading Stock Scanner — App Memory
 
-**HARD RULE FOR EVERY AGENT:** Read this entire file before any edit, commit, deploy, or architecture change to this app. Do not skip it. Do not work from memory of prior turns alone.
+**SCOPE:** This file is **only** for the Day Trading Stock Scanner app / repo (`xgamer791/day-trading-stock-scanner`). Do **not** apply these rules to any other project, site, or agent task.
+
+**HARD RULE FOR EVERY AGENT:** Before any edit, commit, deploy, or architecture change **in this repository**, read this entire file. Do not skip it. Do not work from memory of prior turns alone.
 
 Repo: `xgamer791/day-trading-stock-scanner`  
 Live: https://xgamer791.github.io/day-trading-stock-scanner/  

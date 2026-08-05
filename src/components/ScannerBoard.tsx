@@ -27,7 +27,7 @@ export function ScannerBoard() {
       if (inFlight.current) return;
       inFlight.current = true;
       try {
-        // LIVE ONLY — never live.json / snapshot (APP_MEMORY.md)
+        // LIVE ONLY — never live.json / snapshot (STOCK_SCANNER_APP_MEMORY.md)
         const live = await fetchLiveScannerClient();
         if (cancelled) return;
 
@@ -46,7 +46,7 @@ export function ScannerBoard() {
         if (cancelled) return;
         setConnected(false);
         setError(err instanceof Error ? err.message : "Failed to load live data");
-        // APP_MEMORY: on failure show RECONNECTING/error — do NOT paint stale last-tick rows.
+        // STOCK_SCANNER_APP_MEMORY: on failure show RECONNECTING/error — do NOT paint stale last-tick rows.
         setData(null);
       } finally {
         inFlight.current = false;

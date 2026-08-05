@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * VERIFY YOUR WORK — Flt data path (APP_MEMORY.md).
+ * VERIFY YOUR WORK — Flt data path (STOCK_SCANNER_APP_MEMORY.md).
  * Uses direct APIs (no CORS proxy) to prove marketCap/price float math
  * for current Most Advanced runners. Exit 1 if coverage is too low.
  */
