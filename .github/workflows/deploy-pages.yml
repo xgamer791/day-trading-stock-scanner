@@ -5,8 +5,8 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Refresh live market data frequently during US trading hours (ET)
-    - cron: "*/5 8-21 * * 1-5"
+    # Refresh published snapshot every minute during US market hours (ET)
+    - cron: "*/1 8-21 * * 1-5"
 
 permissions:
   contents: read

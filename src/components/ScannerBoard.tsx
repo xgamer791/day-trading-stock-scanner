@@ -2,40 +2,24 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
+import { fetchLiveScannerClient, liveJsonUrl } from "@/lib/liveClient";
 import type { ScannerPayload } from "@/lib/types";
 
-function liveDataUrl(): string {
-  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
-  return `${base}/data/live.json?t=${Date.now()}`;
-}
-
 async function loadScanner(): Promise<ScannerPayload> {
-  const key = process.env.NEXT_PUBLIC_POLYGON_API_KEY;
-  if (key) {
-    const [newsRes, gainersRes] = await Promise.all([
-      fetch(
-        `https://api.polygon.io/v2/reference/news?limit=40&order=desc&sort=published_utc&apiKey=${key}`,
-      ),
-      fetch(
-        `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/gainers?apiKey=${key}`,
-      ),
-    ]);
-    if (!newsRes.ok || !gainersRes.ok) {
-      throw new Error(
-        `Polygon live data failed (news ${newsRes.status}, gainers ${gainersRes.status})`,
-      );
-    }
-    const { buildFromPolygon } = await import("@/lib/clientPolygon");
-    return buildFromPolygon(await newsRes.json(), await gainersRes.json());
+  // Primary: browser live pull (all US listings via composite movers + HOD confirm)
+  try {
+    return await fetchLiveScannerClient();
+  } catch (err) {
+    console.warn("Live client scan failed, trying published snapshot:", err);
   }
 
-  const res = await fetch(liveDataUrl(), { cache: "no-store" });
+  const res = await fetch(liveJsonUrl(), { cache: "no-store" });
   if (!res.ok) {
     throw new Error(`Live market data unavailable (${res.status})`);
   }
   const payload = (await res.json()) as ScannerPayload;
-  if (!payload.gainers?.length && !payload.premarket?.length) {
-    throw new Error("Live market data returned no movers");
+  if (!payload.gainers?.length && !payload.premarket?.length && payload.session === "regular") {
+    throw new Error("Live market data returned no HOD movers");
   }
   return payload;
 }
@@ -44,7 +28,7 @@ export function ScannerBoard() {
   const [data, setData] = useState<ScannerPayload | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("pre");
+  const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("mkt");
 
   useEffect(() => {
     let cancelled = false;
@@ -64,7 +48,8 @@ export function ScannerBoard() {
     };
 
     tick();
-    const id = setInterval(tick, 15_000);
+    // Near real-time: refresh continuously during the session
+    const id = setInterval(tick, 3000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -81,7 +66,14 @@ export function ScannerBoard() {
       })
     : "—";
 
-  const sourceLabel = data?.source === "polygon" ? "POLYGON" : data ? "HOD LIVE" : "LOADING";
+  const sourceLabel =
+    data?.source === "polygon"
+      ? "POLYGON"
+      : data?.source === "full-us-realtime"
+        ? "US ALL-MKTS"
+        : data
+          ? "HOD LIVE"
+          : "LOADING";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -113,7 +105,7 @@ export function ScannerBoard() {
               HOD Scanner
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-            High-of-day only · Full US market
+              High-of-day only · NYSE · NASDAQ · AMEX · full US
             </div>
           </div>
           <SessionBadge session={data?.session ?? "closed"} />
@@ -139,7 +131,7 @@ export function ScannerBoard() {
                 display: "inline-block",
               }}
             />
-            {connected ? "LIVE" : "RECONNECTING"}
+            {connected ? "LIVE 3s" : "RECONNECTING"}
           </span>
           <span>ET {updatedLabel}</span>
           <span
@@ -149,7 +141,7 @@ export function ScannerBoard() {
               color: "var(--hod)",
             }}
           >
-            {data ? sourceLabel : "LOADING"}
+            {sourceLabel}
           </span>
         </div>
       </div>
@@ -222,18 +214,14 @@ export function ScannerBoard() {
             title="Premarket"
             subtitle={
               data?.session === "premarket"
-                ? "Premarket HOD peaks only"
+                ? "Premarket HOD peaks — all US markets"
                 : "Today's gap plays still at high of day"
             }
             count={data?.premarket.length ?? 0}
           />
           <StockTable
             rows={data?.premarket ?? []}
-            emptyText={
-              error
-                ? "Live data error"
-                : "No premarket HOD peaks right now"
-            }
+            emptyText={error ? "Live data error" : "No premarket HOD peaks right now"}
           />
         </section>
 
@@ -246,7 +234,7 @@ export function ScannerBoard() {
             subtitle={
               data?.session === "premarket"
                 ? "Opens 9:30 AM ET — open-market HOD only"
-                : "Open-market gainers at high of day only"
+                : "Open-market HOD peaks — NYSE / NASDAQ / AMEX"
             }
             count={data?.gainers.length ?? 0}
           />
