@@ -2,12 +2,16 @@
  * LIVE-ONLY client feed (APP_MEMORY.md — read before every edit).
  *
  * Every ~3s poll (no mover-row cache):
- *  1) Nasdaq Most Advanced (discovery)
- *  2) Yahoo day_gainers — price, prevClose, volume, impliedSharesOutstanding
+ *  1) Nasdaq Most Advanced (discovery only — never the ranked board alone)
+ *  2) Yahoo day_gainers — REQUIRED primary quotes (price, prevClose, vol, Flt)
  *  3) Yahoo spark for Most Advanced symbols missing from day_gainers (≤30)
- *  4) Live Flt for those spark symbols via small Nasdaq quote summary
+ *  4) Live Flt for ranked spark rows via small Nasdaq quote summary
  *     (marketCap/price). NOT the 2MB screener download — proxies cannot carry it.
  *  5) Rank by same-quote % — top 50
+ *
+ * If Yahoo day_gainers fails: throw / RECONNECTING. Do NOT substitute the
+ * Nasdaq Most Advanced list as “top gainers” (that swap looked like a random
+ * wrong board ~20s in when proxies burned out).
  *
  * FORBIDDEN: live.json, floats.json, last-tick-as-LIVE, localStorage, etc.
  * Never use Nasdaq % with Yahoo last.
@@ -15,7 +19,8 @@
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
-const FLOAT_SYMBOL_MAX = 20;
+/** Keep Flt fills small — too many summary proxy hits kill day_gainers (~20s). */
+const FLOAT_SYMBOL_MAX = 12;
 const FLOAT_BATCH = 4;
 
 function bust(url: string): string {
@@ -388,9 +393,8 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   const session = sessionNow();
 
   let advanced: Seed[] = [];
-  let quotes = new Map<string, LiveQuote>();
+  let dayGainers = new Map<string, LiveQuote>();
   let yahooErr: Error | null = null;
-  let advancedErr: Error | null = null;
 
   const [advRes, yahooRes] = await Promise.allSettled([
     fetchMostAdvanced(),
@@ -398,34 +402,28 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   ]);
 
   if (advRes.status === "fulfilled") advanced = advRes.value;
-  else advancedErr = advRes.reason instanceof Error ? advRes.reason : new Error(String(advRes.reason));
+  // Discovery soft-fail — Most Advanced is optional; day_gainers is not.
 
-  if (yahooRes.status === "fulfilled") quotes = yahooRes.value;
+  if (yahooRes.status === "fulfilled") dayGainers = yahooRes.value;
   else yahooErr = yahooRes.reason instanceof Error ? yahooRes.reason : new Error(String(yahooRes.reason));
 
-  const missing = advanced.map((s) => s.symbol).filter((s) => !quotes.has(s));
-  let marketCaps = new Map<string, number>();
-
-  if (missing.length) {
-    // Price (spark) + marketCap (small summaries) in parallel — same runner set.
-    const [sparkRes, mcapRes] = await Promise.allSettled([
-      fetchYahooSpark(missing),
-      fetchLiveMarketCaps(missing),
-    ]);
-    if (sparkRes.status === "fulfilled") {
-      for (const [sym, q] of sparkRes.value) quotes.set(sym, q);
-    }
-    if (mcapRes.status === "fulfilled") marketCaps = mcapRes.value;
+  // HARD: Yahoo day_gainers is the ranked board. Never paint Most Advanced /
+  // spark-only as top gainers when day_gainers is down (wrong list swap).
+  if (!dayGainers.size) {
+    throw yahooErr || new Error("Live Yahoo day_gainers unavailable");
   }
 
-  if (!quotes.size && advanced.length) {
-    const syms = advanced.map((s) => s.symbol);
-    const [sparkRes, mcapRes] = await Promise.allSettled([
-      fetchYahooSpark(syms),
-      fetchLiveMarketCaps(syms),
-    ]);
-    if (sparkRes.status === "fulfilled") quotes = sparkRes.value;
-    if (mcapRes.status === "fulfilled") marketCaps = mcapRes.value;
+  const quotes = new Map<string, LiveQuote>(dayGainers);
+
+  const missing = advanced.map((s) => s.symbol).filter((s) => !quotes.has(s));
+  if (missing.length) {
+    // Spark only — Flt summaries wait until after rank (fewer proxy hits).
+    try {
+      const spark = await fetchYahooSpark(missing);
+      for (const [sym, q] of spark) quotes.set(sym, q);
+    } catch {
+      /* day_gainers board still valid without spark fill */
+    }
   }
 
   for (const s of advanced) {
@@ -433,28 +431,20 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     if (q && (!q.name || q.name === q.symbol) && s.name) q.name = s.name;
   }
 
-  if (!quotes.size) {
-    throw yahooErr || advancedErr || new Error("Live Yahoo spark failed");
-  }
+  let movers = [...quotes.values()]
+    .map(toMover)
+    .filter((m) => {
+      const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
+      return Math.abs(recomputed - m.changePct) < 0.05;
+    })
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, FEED_LIMIT);
 
-  let movers = applyLiveFloatFromMcap(
-    [...quotes.values()]
-      .map(toMover)
-      .filter((m) => {
-        const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
-        return Math.abs(recomputed - m.changePct) < 0.05;
-      })
-      .sort((a, b) => b.changePct - a.changePct)
-      .slice(0, FEED_LIMIT),
-    marketCaps,
-  );
-
-  // Fill any remaining Flt gaps on the ranked board (live summaries, soft-fail).
+  // Flt for ranked spark rows only (day_gainers already carry Yahoo share counts).
   const stillNeed = movers.filter((m) => m.floatMillions == null).map((m) => m.symbol);
   if (stillNeed.length) {
     try {
-      const extra = await fetchLiveMarketCaps(stillNeed);
-      for (const [k, v] of extra) marketCaps.set(k, v);
+      const marketCaps = await fetchLiveMarketCaps(stillNeed);
       movers = applyLiveFloatFromMcap(movers, marketCaps);
     } catch {
       /* leave blank */
