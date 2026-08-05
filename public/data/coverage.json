@@ -1,0 +1,63 @@
+{
+  "updatedAt": "2026-08-05T14:31:52.820Z",
+  "description": "HOD Scanner screens common stocks across official US exchange directories and major index membership lists. Feeds show the top 20 HOD gainers only.",
+  "exchanges": {
+    "NASDAQ": {
+      "symbolCount": 3557
+    },
+    "NYSE": {
+      "symbolCount": 2314
+    },
+    "NYSE American (AMEX)": {
+      "symbolCount": 272
+    },
+    "NYSE Arca": {
+      "symbolCount": 14
+    },
+    "Cboe BZX": {
+      "symbolCount": 4
+    },
+    "IEX": {
+      "symbolCount": 0
+    },
+    "Other": {
+      "symbolCount": 0
+    }
+  },
+  "indexes": {
+    "Dow Jones Industrial Average (DJIA)": {
+      "symbolCount": 30
+    },
+    "S&P 500": {
+      "symbolCount": 501
+    },
+    "S&P MidCap 400": {
+      "symbolCount": 405
+    },
+    "S&P SmallCap 600": {
+      "symbolCount": 600
+    },
+    "Russell 1000 / 2000 / 3000 (via full listed US equity universe)": {
+      "symbolCount": 6786
+    }
+  },
+  "totals": {
+    "uniqueSymbols": 6786,
+    "feedLimit": 20
+  },
+  "marketsScreened": [
+    "NASDAQ (Global Select / Global Market / Capital Market)",
+    "NYSE",
+    "NYSE American (AMEX)",
+    "NYSE Arca",
+    "Cboe BZX",
+    "IEX (when present in official directory)",
+    "Dow Jones Industrial Average",
+    "S&P 500",
+    "S&P MidCap 400",
+    "S&P SmallCap 600",
+    "Russell 1000",
+    "Russell 2000",
+    "Russell 3000"
+  ]
+}

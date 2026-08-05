@@ -264,7 +264,7 @@ function toMover(q, changePct, price = q.last) {
 
 function hodOnly(
   movers,
-  { minChangePct = 2, minPrice = 0.5, maxPrice = 1000, minVolume = 5000, topN = 60 } = {},
+  { minChangePct = 2, minPrice = 0.5, maxPrice = 1000, minVolume = 1000, topN = 20 } = {},
 ) {
   return movers
     .filter(
@@ -299,33 +299,49 @@ async function fetchNews(count = 40) {
   }
 }
 
+async function loadBuiltUniverse() {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const raw = await readFile(path.join(ROOT, "public", "data", "universe.json"), "utf8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data.symbols) ? data.symbols : [];
+  } catch {
+    return [];
+  }
+}
+
 async function main() {
   const session = sessionNow();
   console.log(`Full-market TRUE HOD scan (session=${session})…`);
 
-  const [movers, universe, sp500, yahooGainers, yahooActives, news] = await Promise.all([
-    fetchLiveMarketMovers(),
-    fetchAllExchangeUniverse(),
-    fetchSp500Symbols(),
-    fetchYahooScreener("day_gainers", 100),
-    fetchYahooScreener("most_actives", 50),
-    fetchNews(40),
-  ]);
+  const [movers, screenerUniverse, builtUniverse, yahooGainers, yahooActives, news] =
+    await Promise.all([
+      fetchLiveMarketMovers(),
+      fetchAllExchangeUniverse(),
+      loadBuiltUniverse(),
+      fetchYahooScreener("day_gainers", 100),
+      fetchYahooScreener("most_actives", 50),
+      fetchNews(40),
+    ]);
 
-  const byVol = [...universe].sort((a, b) => b.nasdaqVolume - a.nasdaqVolume).slice(0, 300);
+  const byVol = [...screenerUniverse]
+    .sort((a, b) => b.nasdaqVolume - a.nasdaqVolume)
+    .slice(0, 400);
 
-  // Priority: LIVE most-advanced / most-active first (true today movers across exchanges)
+  // Full US universe seed (official exchange dirs + indexes) for breadth
+  const universeSample = builtUniverse
+    .filter((s) => /^[A-Z]{1,5}$/.test(s))
+    .slice(0, 500);
+
   const moverSymbols = movers.map((m) => m.symbol);
   const candidateSymbols = [
     ...moverSymbols,
-    ...moverSymbols, // quoted first / deduped — ensures live advanced names are never dropped from the pool
     ...yahooGainers,
     ...yahooActives,
-    ...sp500,
     ...byVol.map((r) => r.symbol),
+    ...universeSample,
   ];
 
-  // Quote live movers first in their own pass so rate-limits don't skip them
   const priority = [...new Set(moverSymbols)];
   const rest = [...new Set(candidateSymbols)].filter((s) => !priority.includes(s));
   const live = new Map([
@@ -333,7 +349,9 @@ async function main() {
     ...(await fetchLiveQuotes(rest)),
   ]);
   const quotes = [...live.values()].filter((q) => isTodayEt(q.tradeTimeMs));
-  console.log(`Live HOD candidates: ${quotes.length}`);
+  console.log(
+    `Universe size=${builtUniverse.length || screenerUniverse.length}; live HOD quotes=${quotes.length}`,
+  );
 
   if (quotes.length < 15) {
     throw new Error(`Too few live quotes (${quotes.length})`);
@@ -360,31 +378,45 @@ async function main() {
   const premarket = hodOnly(premarketRaw, {
     minChangePct: session === "premarket" ? 2 : 3,
     minVolume: 1000,
-    topN: 60,
+    topN: 20,
   });
 
   const gainers = hodOnly(gainersRaw, {
     minChangePct: 2,
     minVolume: 1000,
-    topN: 60,
+    topN: 20,
   });
 
-  // Sanity: refuse publishing if we somehow only have mild large-cap drifts while movers API had 100%+ names
   const advanced = movers.filter((m) => m.source === "MostAdvanced" && (m.changePct || 0) >= 40);
   if (session !== "premarket" && session !== "closed" && gainers.length === 0) {
     throw new Error("No true HOD gainers after filter");
   }
-  if (advanced.length && gainers.length) {
-    const hit = advanced.some((a) => gainers.some((g) => g.symbol === a.symbol) || premarket.some((g) => g.symbol === a.symbol) || quotes.some((q) => q.symbol === a.symbol && q.atHod));
+  if (advanced.length) {
     console.log(
-      `Cross-check big movers in quote set: ${advanced.map((a) => a.symbol).slice(0, 8).join(", ")} (any HOD quote=${hit})`,
+      `Big movers watched: ${advanced
+        .map((a) => a.symbol)
+        .slice(0, 10)
+        .join(", ")}`,
     );
+  }
+
+  let coverage = null;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    coverage = JSON.parse(
+      await readFile(path.join(ROOT, "public", "data", "coverage.json"), "utf8"),
+    );
+  } catch {
+    /* optional */
   }
 
   const payload = {
     session,
     updatedAt: new Date().toISOString(),
-    source: "full-market-hod",
+    source: "full-us-market",
+    feedLimit: 20,
+    universeCount: builtUniverse.length || screenerUniverse.length,
+    marketsScreened: coverage?.marketsScreened || [],
     news,
     premarket,
     gainers,
@@ -393,13 +425,10 @@ async function main() {
   await mkdir(path.dirname(OUT), { recursive: true });
   await writeFile(OUT, JSON.stringify(payload, null, 2));
 
-  console.log(`Wrote ${OUT} — HOD pre=${premarket.length} HOD gainers=${gainers.length}`);
+  console.log(`Wrote ${OUT} — top20 HOD pre=${premarket.length} gainers=${gainers.length}`);
   console.log(
-    "HOD Gainers:",
-    gainers
-      .slice(0, 12)
-      .map((m) => `${m.symbol} ${m.changePct.toFixed(1)}%`)
-      .join(", ") || "(none)",
+    "Top 20 HOD Gainers:",
+    gainers.map((m) => `${m.symbol} ${m.changePct.toFixed(1)}%`).join(", ") || "(none)",
   );
 }
 

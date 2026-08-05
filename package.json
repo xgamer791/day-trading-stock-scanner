@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "npm run fetch:live && next dev --turbopack",
-    "fetch:live": "node scripts/fetch-live.mjs",
-    "prebuild": "node scripts/fetch-live.mjs",
+    "fetch:live": "node scripts/build-universe.mjs && node scripts/fetch-live.mjs",
+    "fetch:universe": "node scripts/build-universe.mjs",
+    "prebuild": "npm run fetch:live",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

@@ -209,7 +209,7 @@ function hodRank(rows: StockMover[], minChangePct: number): StockMover[] {
         m.volume >= 1000,
     )
     .sort((a, b) => b.changePct - a.changePct)
-    .slice(0, 60);
+    .slice(0, 20);
 }
 
 async function mapPool<T, R>(items: T[], concurrency: number, fn: (t: T) => Promise<R>): Promise<R[]> {

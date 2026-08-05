@@ -161,7 +161,7 @@ export function ScannerBoard() {
               HOD Scanner
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-              High-of-day only · NYSE · NASDAQ · AMEX · full US
+            High-of-day only · Top 20 · Full US markets
             </div>
           </div>
           <SessionBadge session={session} />
@@ -270,8 +270,8 @@ export function ScannerBoard() {
             title="Premarket"
             subtitle={
               session === "premarket"
-                ? "Premarket HOD peaks — all US markets"
-                : "Today's gap plays still at high of day"
+                ? "Top 20 premarket HOD peaks — all US markets"
+                : "Top 20 gap plays still at high of day"
             }
             count={data?.premarket.length ?? 0}
           />
@@ -289,8 +289,8 @@ export function ScannerBoard() {
             title="Market Top Gainers"
             subtitle={
               session === "premarket"
-                ? "Opens 9:30 AM ET — open-market HOD only"
-                : "Open-market HOD peaks — NYSE / NASDAQ / AMEX"
+                ? "Opens 9:30 AM ET — top 20 open-market HOD"
+                : "Top 20 open-market HOD peaks — full US"
             }
             count={data?.gainers.length ?? 0}
           />
