@@ -31,7 +31,7 @@ export type NewsItem = {
 export type ScannerPayload = {
   session: MarketSession;
   updatedAt: string;
-  source: "live" | "nasdaq" | "nasdaq+yahoo" | "yahoo" | "polygon";
+  source: "full-market-hod" | "live" | "nasdaq" | "yahoo" | "polygon";
   news: NewsItem[];
   premarket: StockMover[];
   gainers: StockMover[];

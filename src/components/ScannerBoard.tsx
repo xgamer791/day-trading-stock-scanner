@@ -81,12 +81,7 @@ export function ScannerBoard() {
       })
     : "—";
 
-  const sourceLabel =
-    data?.source === "polygon"
-      ? "POLYGON"
-      : data
-        ? "LIVE TODAY"
-        : "LOADING";
+  const sourceLabel = data?.source === "polygon" ? "POLYGON" : data ? "HOD LIVE" : "LOADING";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -118,7 +113,7 @@ export function ScannerBoard() {
               HOD Scanner
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-              High-of-day peaking stocks · US equities
+            High-of-day only · Full US market
             </div>
           </div>
           <SessionBadge session={data?.session ?? "closed"} />
@@ -227,8 +222,8 @@ export function ScannerBoard() {
             title="Premarket"
             subtitle={
               data?.session === "premarket"
-                ? "Today's premarket movers only"
-                : "Today's gap / premarket plays (open vs prior close)"
+                ? "Premarket HOD peaks only"
+                : "Today's gap plays still at high of day"
             }
             count={data?.premarket.length ?? 0}
           />
@@ -237,9 +232,7 @@ export function ScannerBoard() {
             emptyText={
               error
                 ? "Live data error"
-                : data?.session === "premarket"
-                  ? "Loading today's premarket movers…"
-                  : "No significant gaps from today's premarket"
+                : "No premarket HOD peaks right now"
             }
           />
         </section>
@@ -252,8 +245,8 @@ export function ScannerBoard() {
             title="Market Top Gainers"
             subtitle={
               data?.session === "premarket"
-                ? "Opens at 9:30 AM ET — regular session gainers only"
-                : "Today's open-market gainers (live vs prior close)"
+                ? "Opens 9:30 AM ET — open-market HOD only"
+                : "Open-market gainers at high of day only"
             }
             count={data?.gainers.length ?? 0}
           />
@@ -264,7 +257,7 @@ export function ScannerBoard() {
                 ? "Live data error"
                 : data?.session === "premarket"
                   ? "Market not open yet"
-                  : "Loading today's market gainers…"
+                  : "No open-market HOD peaks right now"
             }
           />
         </section>
