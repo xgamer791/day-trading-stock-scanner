@@ -222,13 +222,15 @@ function seedToMover(
   const dayLow = q?.dayLow && q.dayLow > 0 ? q.dayLow : price;
   const volume = q?.volume && q.volume > 0 ? q.volume : seed.volume || 0;
 
+  // Never display Nasdaq seed % when Yahoo quote failed — that overwrite
+  // caused the "correct for a split second, then wrong" glitch.
   let changePct: number;
-  if (pctOverride != null && Number.isFinite(pctOverride)) {
+  if (pctOverride != null && Number.isFinite(pctOverride) && q) {
     changePct = pctOverride;
   } else if (q && prevClose > 0 && price > 0) {
     changePct = ((price - prevClose) / prevClose) * 100;
   } else {
-    changePct = seed.changePct;
+    changePct = NaN;
   }
 
   const hodDistancePct = dayHigh > 0 ? ((dayHigh - price) / dayHigh) * 100 : 0;
@@ -252,9 +254,15 @@ function seedToMover(
   };
 }
 
+function quoteSynced(m: StockMover): boolean {
+  if (!(m.changePct > 0) || !(m.price > 0) || !(m.prevClose > 0)) return false;
+  const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
+  return Math.abs(recomputed - m.changePct) < 0.75;
+}
+
 function topGainers(rows: StockMover[]): StockMover[] {
   return [...rows]
-    .filter((m) => m.changePct > 0 && m.price > 0)
+    .filter((m) => Number.isFinite(m.changePct) && quoteSynced(m))
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, FEED_LIMIT);
 }
@@ -321,29 +329,39 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
 
   if (session === "premarket") {
     premarket = topGainers(
-      candidates.map((seed) => {
-        const q = quoteMap.get(seed.symbol);
-        if (!q) return seedToMover(seed, null);
-        const price = q.prePrice ?? q.last;
-        const pct =
-          q.prePct != null
-            ? q.prePct
-            : q.prevClose > 0
-              ? ((price - q.prevClose) / q.prevClose) * 100
-              : seed.changePct;
-        return seedToMover(seed, { ...q, last: price }, pct);
-      }),
+      candidates
+        .map((seed) => {
+          const q = quoteMap.get(seed.symbol);
+          if (!q) return null;
+          const price = q.prePrice ?? q.last;
+          const pct =
+            q.prePct != null
+              ? q.prePct
+              : q.prevClose > 0
+                ? ((price - q.prevClose) / q.prevClose) * 100
+                : NaN;
+          return seedToMover(seed, { ...q, last: price }, pct);
+        })
+        .filter((m): m is StockMover => Boolean(m)),
     );
   } else if (session !== "closed") {
     gainers = topGainers(
-      candidates.map((seed) => seedToMover(seed, quoteMap.get(seed.symbol) ?? null)),
+      candidates
+        .map((seed) => {
+          const q = quoteMap.get(seed.symbol);
+          if (!q) return null;
+          return seedToMover(seed, q);
+        })
+        .filter((m): m is StockMover => Boolean(m)),
     );
     premarket = topGainers(
-      candidates.map((seed) => {
-        const q = quoteMap.get(seed.symbol);
-        if (!q) return seedToMover(seed, null);
-        return seedToMover(seed, q, q.gapPct);
-      }),
+      candidates
+        .map((seed) => {
+          const q = quoteMap.get(seed.symbol);
+          if (!q) return null;
+          return seedToMover(seed, q, q.gapPct);
+        })
+        .filter((m): m is StockMover => Boolean(m)),
     );
   }
 

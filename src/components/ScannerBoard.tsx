@@ -46,31 +46,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-async function loadScanner(): Promise<ScannerPayload> {
-  // Fast path: same-origin snapshot (always works on GitHub Pages)
-  const snapshot = await fetchSnapshot();
+function rowSynced(m: { price: number; prevClose: number; changePct: number }): boolean {
+  if (!(m.price > 0) || !(m.prevClose > 0) || !Number.isFinite(m.changePct)) return false;
+  const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
+  return Math.abs(recomputed - m.changePct) < 0.75;
+}
 
-  // Best-effort realtime upgrade (CORS proxies). Must not block UI.
-  try {
-    const live = await withTimeout(fetchLiveScannerClient(), 4000);
-    if (live.gainers.length || live.premarket.length) {
-      return {
-        ...live,
-        news: live.news.length ? live.news : snapshot.news,
-      };
-    }
-  } catch {
-    /* keep snapshot */
-  }
-
-  if (
-    !snapshot.gainers?.length &&
-    !snapshot.premarket?.length &&
-    localSession() === "regular"
-  ) {
-    throw new Error("Live market data returned no top gainers");
-  }
-  return snapshot;
+function payloadQuality(p: ScannerPayload): number {
+  const rows = [...(p.gainers || []), ...(p.premarket || [])];
+  if (!rows.length) return 0;
+  const synced = rows.filter(rowSynced).length;
+  return synced * 10 + Math.min(rows.length, 20);
 }
 
 export function ScannerBoard() {
@@ -90,11 +76,43 @@ export function ScannerBoard() {
 
     const tick = async () => {
       try {
-        const payload = await loadScanner();
+        // Phase 1: paint trusted snapshot immediately (never block on CORS proxies)
+        const snapshot = await fetchSnapshot();
         if (cancelled) return;
-        setData(payload);
+
+        if (
+          !snapshot.gainers?.length &&
+          !snapshot.premarket?.length &&
+          localSession() === "regular"
+        ) {
+          throw new Error("Live market data returned no top gainers");
+        }
+
+        setData(snapshot);
         setConnected(true);
         setError(null);
+
+        // Phase 2: optional live upgrade — only if every row is quote-synced
+        try {
+          const live = await withTimeout(fetchLiveScannerClient(), 4000);
+          if (cancelled) return;
+          // Gainers must be last-vs-prevClose synced. Premarket may use gap %.
+          const liveOk =
+            (live.gainers.length > 0 || live.premarket.length > 0) &&
+            payloadQuality(live) >= Math.max(1, payloadQuality(snapshot) - 5) &&
+            (live.gainers.length ? live.gainers.every(rowSynced) : true);
+          if (liveOk) {
+            setData({
+              ...live,
+              news: live.news.length ? live.news : snapshot.news,
+              universeCount: snapshot.universeCount ?? live.universeCount,
+              marketsScreened: snapshot.marketsScreened ?? live.marketsScreened,
+              feedLimit: snapshot.feedLimit ?? live.feedLimit,
+            });
+          }
+        } catch {
+          /* keep snapshot */
+        }
       } catch (err) {
         if (cancelled) return;
         setConnected(false);
