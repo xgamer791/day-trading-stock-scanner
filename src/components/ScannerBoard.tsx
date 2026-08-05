@@ -119,7 +119,7 @@ export function ScannerBoard() {
             >
               Top Gainers
             </div>
-            <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
+            <div style={{ marginTop: 4, fontSize: 13, color: "var(--text-dim)" }}>
               Live API only · Top 20 · Entire US market · 3s poll
             </div>
           </div>

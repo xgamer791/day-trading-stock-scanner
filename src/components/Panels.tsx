@@ -14,10 +14,10 @@ export function SessionBadge({ session }: { session: string }) {
     <span
       style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
+        fontSize: 12,
         fontWeight: 700,
         letterSpacing: "0.08em",
-        color: session === "closed" ? "var(--text-faint)" : "var(--hod)",
+        color: session === "closed" ? "var(--text-dim)" : "var(--hod)",
         border: "1px solid var(--border-strong)",
         padding: "4px 8px",
         background: "var(--bg-row)",
@@ -72,7 +72,7 @@ export function PanelHeader({
           </span>
         )}
       </div>
-      <p style={{ margin: 0, fontSize: 12, color: "var(--text-dim)", lineHeight: 1.35 }}>
+      <p style={{ margin: 0, fontSize: 13, color: "var(--text-dim)", lineHeight: 1.35 }}>
         {subtitle}
       </p>
     </header>
@@ -155,19 +155,21 @@ export function StockTable({
   rows: StockMover[];
   emptyText: string;
 }) {
+  const cols = "64px 1fr 88px 72px 64px";
   return (
     <div style={{ overflow: "auto", flex: 1 }}>
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "56px 1fr 72px 64px 56px",
-          gap: 6,
-          padding: "8px 12px",
+          gridTemplateColumns: cols,
+          gap: 8,
+          padding: "10px 14px",
           fontFamily: "var(--font-mono)",
-          fontSize: 10,
-          letterSpacing: "0.06em",
+          fontSize: 12,
+          fontWeight: 600,
+          letterSpacing: "0.04em",
           textTransform: "uppercase",
-          color: "var(--text-faint)",
+          color: "var(--text-dim)",
           borderBottom: "1px solid var(--border)",
           position: "sticky",
           top: 0,
@@ -175,8 +177,8 @@ export function StockTable({
           zIndex: 1,
         }}
       >
-        <span>Sym</span>
-        <span>Last</span>
+        <span>Ticker</span>
+        <span style={{ textAlign: "right" }}>Price</span>
         <span style={{ textAlign: "right" }}>%Chg</span>
         <span style={{ textAlign: "right" }}>Vol</span>
         <span style={{ textAlign: "right" }}>Flt</span>
@@ -187,30 +189,39 @@ export function StockTable({
           className="panel-enter row-flash"
           style={{
             display: "grid",
-            gridTemplateColumns: "56px 1fr 72px 64px 56px",
-            gap: 6,
-            padding: "10px 12px",
+            gridTemplateColumns: cols,
+            gap: 8,
+            padding: "12px 14px",
             borderBottom: "1px solid var(--border)",
             alignItems: "center",
             animationDelay: `${Math.min(idx, 15) * 25}ms`,
           }}
         >
-          <div>
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontWeight: 700,
-                fontSize: 13,
-                letterSpacing: "0.02em",
-              }}
-            >
-              {row.symbol}
-            </div>
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontWeight: 700,
+              fontSize: 15,
+              letterSpacing: "0.01em",
+              color: "var(--text)",
+            }}
+          >
+            {row.symbol}
           </div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 15,
+              fontWeight: 600,
+              fontVariantNumeric: "tabular-nums",
+              textAlign: "right",
+              color: "var(--text)",
+            }}
+          >
             {formatPrice(row.price)}
-            <div style={{ fontSize: 10, color: "var(--text-faint)" }}>
-              H {formatPrice(row.dayHigh)}
+            <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-dim)", marginTop: 2 }}>
+              {row.change >= 0 ? "+" : ""}
+              {formatPrice(Math.abs(row.change))}
             </div>
           </div>
           <div
@@ -218,10 +229,10 @@ export function StockTable({
               textAlign: "right",
               fontFamily: "var(--font-mono)",
               fontWeight: 700,
-              fontSize: 13,
+              fontSize: 15,
               color: row.changePct >= 0 ? "var(--green)" : "var(--red)",
               background: row.changePct >= 0 ? "var(--green-dim)" : "var(--red-dim)",
-              padding: "4px 6px",
+              padding: "6px 8px",
             }}
             title="(last − prev close) / prev close — same as Realtime HOD %"
           >
@@ -231,8 +242,9 @@ export function StockTable({
             style={{
               textAlign: "right",
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              color: "var(--text-dim)",
+              fontSize: 14,
+              fontWeight: 500,
+              color: "var(--text)",
             }}
           >
             {formatVolume(row.volume)}
@@ -241,8 +253,9 @@ export function StockTable({
             style={{
               textAlign: "right",
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              color: "var(--text-dim)",
+              fontSize: 14,
+              fontWeight: 500,
+              color: "var(--text)",
             }}
           >
             {formatFloat(row.floatMillions)}
