@@ -273,48 +273,69 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote
   return map;
 }
 
+/** Parse Nasdaq summary MarketCap strings like "$96.85M" / "1,052,627,659". */
+function parseMarketCapDollars(v: unknown): number | null {
+  if (v == null) return null;
+  let s = String(v).trim().toUpperCase().replace(/[$,\s]/g, "");
+  if (!s || s === "N/A" || s === "UNAVALIABLE" || s === "UNAVAILABLE") return null;
+  let mult = 1;
+  if (s.endsWith("T")) {
+    mult = 1e12;
+    s = s.slice(0, -1);
+  } else if (s.endsWith("B")) {
+    mult = 1e9;
+    s = s.slice(0, -1);
+  } else if (s.endsWith("M")) {
+    mult = 1e6;
+    s = s.slice(0, -1);
+  } else if (s.endsWith("K")) {
+    mult = 1e3;
+    s = s.slice(0, -1);
+  }
+  const n = Number(s);
+  if (!Number.isFinite(n) || !(n > 0)) return null;
+  return n * mult;
+}
+
 /**
- * Live Flt fill for this poll only (spark rows). No cross-poll cache / floats.json.
- * Caps requests so proxies stay healthy.
+ * Live Flt for Most Advanced / spark rows (not in Yahoo day_gainers).
+ * Realtime parity: marketCap / live price ≈ impliedSharesOutstanding.
+ * This poll only — no floats.json / cross-poll cache. Yahoo crumb quoteSummary
+ * fails through CORS proxies, so Nasdaq summary is the live transport.
  */
-async function fetchLiveFloatThisPoll(symbols: string[]): Promise<Map<string, number>> {
-  const need = [...new Set(symbols.map((s) => s.toUpperCase()).filter(Boolean))].slice(0, 10);
+async function fetchLiveFloatThisPoll(
+  rows: Array<{ symbol: string; price: number }>,
+): Promise<Map<string, number>> {
+  const need = rows
+    .filter((r) => r.symbol && r.price > 0)
+    .slice(0, 25)
+    .map((r) => ({ symbol: r.symbol.toUpperCase(), price: r.price }));
   const out = new Map<string, number>();
   if (!need.length) return out;
 
-  let crumb: string | null = null;
-  try {
-    await fetchTextViaProxy("https://fc.yahoo.com", 4000).catch(() => "");
-    const text = (await fetchTextViaProxy("https://query2.finance.yahoo.com/v1/test/getcrumb", 5000)).trim();
-    if (text && text.length <= 40 && !text.includes("<") && !text.includes("{")) crumb = text;
-  } catch {
-    return out;
+  // Concurrent batches — keep CORS proxies alive at 3s poll.
+  const BATCH = 8;
+  for (let i = 0; i < need.length; i += BATCH) {
+    const chunk = need.slice(i, i + BATCH);
+    await Promise.all(
+      chunk.map(async ({ symbol, price }) => {
+        try {
+          const data = (await fetchViaProxy(
+            `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`,
+            6000,
+          )) as {
+            data?: { summaryData?: { MarketCap?: { value?: string } } };
+          };
+          const mcap = parseMarketCapDollars(data?.data?.summaryData?.MarketCap?.value);
+          if (mcap == null || !(price > 0)) return;
+          const millions = mcap / price / 1_000_000;
+          if (Number.isFinite(millions) && millions > 0) out.set(symbol, millions);
+        } catch {
+          /* leave empty this poll */
+        }
+      }),
+    );
   }
-  if (!crumb) return out;
-
-  await Promise.all(
-    need.map(async (sym) => {
-      try {
-        const url = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
-          sym,
-        )}?modules=defaultKeyStatistics&crumb=${encodeURIComponent(crumb)}`;
-        const data = (await fetchViaProxy(url, 6000)) as {
-          quoteSummary?: { result?: Array<{ defaultKeyStatistics?: Record<string, unknown> }> };
-        };
-        const ks = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
-        if (!ks) return;
-        const pick = (v: unknown): number | null => {
-          const n = typeof v === "object" && v != null ? Number((v as { raw?: number }).raw) : Number(v);
-          return Number.isFinite(n) && n > 0 ? n / 1_000_000 : null;
-        };
-        const m =
-          pick(ks.impliedSharesOutstanding) ?? pick(ks.sharesOutstanding) ?? pick(ks.floatShares);
-        if (m != null) out.set(sym, m);
-      } catch {
-        /* leave empty this poll */
-      }
-    }),
-  );
   return out;
 }
 
@@ -386,8 +407,10 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     .sort((a, b) => b.changePct - a.changePct)
     .slice(0, FEED_LIMIT);
 
-  // Live Flt for spark-only rows missing share count — this poll only, not cached.
-  const needFlt = movers.filter((m) => m.floatMillions == null).map((m) => m.symbol);
+  // Live Flt for spark-only rows (Most Advanced runners absent from day_gainers).
+  const needFlt = movers
+    .filter((m) => m.floatMillions == null)
+    .map((m) => ({ symbol: m.symbol, price: m.price }));
   if (needFlt.length) {
     const liveFlt = await fetchLiveFloatThisPoll(needFlt);
     if (liveFlt.size) {
