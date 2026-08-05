@@ -172,18 +172,19 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, SparkQuot
   if (!uniq.length) return new Map();
 
   const url = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${encodeURIComponent(uniq.join(","))}&range=1d&interval=1m`;
-  let data: {
+  type SparkPayload = {
     spark?: {
       result?: Array<{
         symbol: string;
         response?: Array<{ meta?: Record<string, unknown> }>;
       }>;
     };
-  } | null = null;
+  };
+  let data: SparkPayload | null = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      data = (await fetchViaProxy(url, 8000)) as typeof data;
+      data = (await fetchViaProxy(url, 8000)) as SparkPayload;
       break;
     } catch {
       if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
@@ -192,7 +193,7 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, SparkQuot
   if (!data) throw new Error("Live Yahoo spark failed");
 
   const map = new Map<string, SparkQuote>();
-  for (const item of data?.spark?.result || []) {
+  for (const item of data.spark?.result || []) {
     const meta = item.response?.[0]?.meta;
     if (!meta) continue;
     const symbol = String(item.symbol || meta.symbol || "").toUpperCase();
