@@ -8,7 +8,7 @@ Inspired by [Realtime Stock Screener](https://apps.apple.com/us/app/realtime-sto
 
 **https://xgamer791.github.io/day-trading-stock-scanner/**
 
-Auto-deploys on every push to `main`. The browser rescans every few seconds; Actions republishes a snapshot every **1 minute** during market hours.
+Auto-deploys on every push to `main`. The browser rescans **live APIs every 3 seconds** (no `live.json` cache for movers).
 
 ## Layout
 
@@ -34,6 +34,8 @@ Universe is rebuilt from official Nasdaq Trader symbol directories + index membe
 - Optional **Polygon** key for exchange-grade websockets
 
 **Only filter:** positive % change, ranked highest → lowest. Warrants / units / rights / preferreds are excluded. No HOD, price, or volume gates.
+
+**No cache:** Gainers/premarket are fetched live in the browser each tick. Stale Actions snapshots are never painted.
 
 > Public feeds are not SIP. For true zero-delay tape, add a Polygon/Massive entitlement.
 

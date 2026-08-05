@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
-import { fetchLiveScannerClient, liveJsonUrl } from "@/lib/liveClient";
+import { fetchLiveScannerClient } from "@/lib/liveClient";
 import type { MarketSession, ScannerPayload } from "@/lib/types";
 
 function localSession(): MarketSession {
@@ -24,41 +24,6 @@ function localSession(): MarketSession {
   return "closed";
 }
 
-async function fetchSnapshot(): Promise<ScannerPayload> {
-  const res = await fetch(liveJsonUrl(), { cache: "no-store" });
-  if (!res.ok) throw new Error(`Snapshot unavailable (${res.status})`);
-  return (await res.json()) as ScannerPayload;
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("timeout")), ms);
-    promise.then(
-      (v) => {
-        clearTimeout(t);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(t);
-        reject(e);
-      },
-    );
-  });
-}
-
-function rowSynced(m: { price: number; prevClose: number; changePct: number }): boolean {
-  if (!(m.price > 0) || !(m.prevClose > 0) || !Number.isFinite(m.changePct)) return false;
-  const recomputed = ((m.price - m.prevClose) / m.prevClose) * 100;
-  return Math.abs(recomputed - m.changePct) < 0.75;
-}
-
-function payloadQuality(p: ScannerPayload): number {
-  const rows = [...(p.gainers || []), ...(p.premarket || [])];
-  if (!rows.length) return 0;
-  const synced = rows.filter(rowSynced).length;
-  return synced * 10 + Math.min(rows.length, 20);
-}
-
 export function ScannerBoard() {
   const [data, setData] = useState<ScannerPayload | null>(null);
   const [connected, setConnected] = useState(false);
@@ -76,52 +41,32 @@ export function ScannerBoard() {
 
     const tick = async () => {
       try {
-        // Phase 1: paint trusted snapshot immediately (never block on CORS proxies)
-        const snapshot = await fetchSnapshot();
+        // LIVE ONLY — never read live.json / snapshots / cached movers
+        const live = await fetchLiveScannerClient();
         if (cancelled) return;
 
         if (
-          !snapshot.gainers?.length &&
-          !snapshot.premarket?.length &&
+          !live.gainers.length &&
+          !live.premarket.length &&
           localSession() === "regular"
         ) {
           throw new Error("Live market data returned no top gainers");
         }
 
-        setData(snapshot);
+        setData(live);
         setConnected(true);
         setError(null);
-
-        // Phase 2: optional live upgrade — only if every row is quote-synced
-        try {
-          const live = await withTimeout(fetchLiveScannerClient(), 4000);
-          if (cancelled) return;
-          // Gainers must be last-vs-prevClose synced. Premarket may use gap %.
-          const liveOk =
-            (live.gainers.length > 0 || live.premarket.length > 0) &&
-            payloadQuality(live) >= Math.max(1, payloadQuality(snapshot) - 5) &&
-            (live.gainers.length ? live.gainers.every(rowSynced) : true);
-          if (liveOk) {
-            setData({
-              ...live,
-              news: live.news.length ? live.news : snapshot.news,
-              universeCount: snapshot.universeCount ?? live.universeCount,
-              marketsScreened: snapshot.marketsScreened ?? live.marketsScreened,
-              feedLimit: snapshot.feedLimit ?? live.feedLimit,
-            });
-          }
-        } catch {
-          /* keep snapshot */
-        }
       } catch (err) {
         if (cancelled) return;
         setConnected(false);
         setError(err instanceof Error ? err.message : "Failed to load live data");
+        // No snapshot fallback — leave screen empty until a fresh live tick succeeds
+        if (!cancelled) setData(null);
       }
     };
 
     tick();
-    const id = setInterval(tick, 5000);
+    const id = setInterval(tick, 3000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -139,15 +84,6 @@ export function ScannerBoard() {
         timeZone: "America/New_York",
       })
     : "—";
-
-  const sourceLabel =
-    data?.source === "full-us-realtime"
-      ? "US ALL-MKTS"
-      : data?.source === "polygon"
-        ? "POLYGON"
-        : data
-          ? "TOP GAINERS"
-          : "LOADING";
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -179,7 +115,7 @@ export function ScannerBoard() {
               Top Gainers
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-              Top 20 · Entire US market · All exchanges
+              Live only · Top 20 · Entire US market
             </div>
           </div>
           <SessionBadge session={session} />
@@ -215,7 +151,7 @@ export function ScannerBoard() {
               color: "var(--hod)",
             }}
           >
-            {sourceLabel}
+            NO CACHE
           </span>
         </div>
       </div>
@@ -288,8 +224,8 @@ export function ScannerBoard() {
             title="Premarket"
             subtitle={
               session === "premarket"
-                ? "Top 20 premarket gainers — entire US market"
-                : "Top 20 gap leaders — entire US market"
+                ? "Live top 20 premarket gainers — entire US market"
+                : "Live top 20 gap leaders — entire US market"
             }
             count={data?.premarket.length ?? 0}
           />
@@ -307,8 +243,8 @@ export function ScannerBoard() {
             title="Market Top Gainers"
             subtitle={
               session === "premarket"
-                ? "Opens 9:30 AM ET — top 20 open-market gainers"
-                : "Top 20 % gainers — entire US market (all exchanges)"
+                ? "Opens 9:30 AM ET — live open-market gainers"
+                : "Live top 20 % gainers — entire US market"
             }
             count={data?.gainers.length ?? 0}
           />
@@ -321,7 +257,7 @@ export function ScannerBoard() {
                   ? "Market not open yet"
                   : session === "closed"
                     ? "Market closed"
-                    : "Loading top gainers…"
+                    : "Scanning live…"
             }
           />
         </section>
