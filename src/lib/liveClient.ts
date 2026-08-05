@@ -1,20 +1,25 @@
 /**
  * LIVE-ONLY full US market top-gainers scanner.
- * No live.json / snapshot / cached movers. Every poll hits live APIs.
+ * Prices/% always from fresh quote APIs — never from live.json.
  *
- * Discovery: Nasdaq Most Advanced + full composite screener
- * Quotes: Yahoo chart (last + prevClose) — same math as TradingView / Realtime
+ * Discovery (symbol list) refreshes ~every 45s to avoid CORS proxy rate limits.
+ * Quotes refresh every poll (3s).
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 20;
+const DISCOVERY_TTL_MS = 45_000;
+
+type Seed = { symbol: string; name: string };
+
+let discoveryCache: { seeds: Seed[]; at: number } | null = null;
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}_=${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function proxies(url: string): string[] {
+function proxyUrls(url: string): string[] {
   const live = bust(url);
   const enc = encodeURIComponent(live);
   return [
@@ -24,35 +29,41 @@ function proxies(url: string): string[] {
   ];
 }
 
-async function fetchViaProxy(url: string, timeoutMs = 4000): Promise<Response> {
-  let lastErr: Error | null = null;
-  for (const p of proxies(url)) {
-    try {
-      const res = await fetch(p, {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) {
-        lastErr = new Error(`proxy ${res.status}`);
-        continue;
-      }
-      const text = await res.text();
-      const trimmed = text.trimStart();
-      if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
-        lastErr = new Error("proxy returned HTML");
-        continue;
-      }
-      // allorigins /get wrap — not used; raw should be plain JSON
-      return new Response(text, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    } catch (e) {
-      lastErr = e instanceof Error ? e : new Error(String(e));
-    }
+/** Race proxies — first valid JSON response wins (faster, less serial rate-limit pain). */
+async function fetchViaProxy(url: string, timeoutMs = 5000): Promise<Response> {
+  const controllers = proxyUrls(url).map((p) => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    const promise = fetch(p, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      signal: ac.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`proxy ${res.status}`);
+        const text = await res.text();
+        const trimmed = text.trimStart();
+        if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+          throw new Error("proxy HTML");
+        }
+        // Validate JSON early
+        JSON.parse(text);
+        return new Response(text, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+      .finally(() => clearTimeout(timer));
+    return { ac, promise };
+  });
+
+  try {
+    return await Promise.any(controllers.map((c) => c.promise));
+  } catch {
+    throw new Error("All live proxies failed");
+  } finally {
+    for (const c of controllers) c.ac.abort();
   }
-  throw lastErr || new Error("All proxies failed");
 }
 
 function parseMoney(v: unknown): number {
@@ -95,11 +106,9 @@ function sessionNow(): ScannerPayload["session"] {
   return "closed";
 }
 
-type Seed = { symbol: string; name: string };
-
 async function fetchMostAdvanced(): Promise<Seed[]> {
   const url = "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50";
-  const res = await fetchViaProxy(url, 5000);
+  const res = await fetchViaProxy(url, 6000);
   const data = await res.json();
   const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
   const out: Seed[] = [];
@@ -114,13 +123,13 @@ async function fetchMostAdvanced(): Promise<Seed[]> {
   return out;
 }
 
-async function fetchFullUsScreener(): Promise<Seed[]> {
+async function fetchFullUsTop(): Promise<Seed[]> {
   const url =
     "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true";
-  const res = await fetchViaProxy(url, 8000);
+  const res = await fetchViaProxy(url, 10000);
   const data = await res.json();
   const rows = data?.data?.rows || [];
-  const ranked = rows
+  return rows
     .filter((r: { symbol: string; name: string; pctchange: string }) => !isJunk(r.symbol, r.name))
     .map((r: { symbol: string; name: string; pctchange: string }) => ({
       symbol: String(r.symbol).replace("/", "-").toUpperCase(),
@@ -129,8 +138,73 @@ async function fetchFullUsScreener(): Promise<Seed[]> {
     }))
     .filter((r: { pct: number }) => r.pct > 0)
     .sort((a: { pct: number }, b: { pct: number }) => b.pct - a.pct)
-    .slice(0, 80);
-  return ranked.map(({ symbol, name }: Seed) => ({ symbol, name }));
+    .slice(0, 60)
+    .map(({ symbol, name }: Seed) => ({ symbol, name }));
+}
+
+async function fetchYahooDayGainers(): Promise<Seed[]> {
+  const url =
+    "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?count=50&scrIds=day_gainers&formatted=false";
+  const res = await fetchViaProxy(url, 6000);
+  const data = await res.json();
+  const quotes = data?.finance?.result?.[0]?.quotes || [];
+  return quotes
+    .map((q: { symbol?: string; shortName?: string; longName?: string }) => ({
+      symbol: String(q.symbol || "")
+        .replace("/", "-")
+        .toUpperCase(),
+      name: q.shortName || q.longName || q.symbol || "",
+    }))
+    .filter((s: Seed) => s.symbol && !isJunk(s.symbol, s.name));
+}
+
+function mergeSeeds(...lists: Seed[][]): Seed[] {
+  const seen = new Set<string>();
+  const out: Seed[] = [];
+  for (const list of lists) {
+    for (const s of list) {
+      if (seen.has(s.symbol)) continue;
+      seen.add(s.symbol);
+      out.push(s);
+      if (out.length >= 50) return out;
+    }
+  }
+  return out;
+}
+
+async function refreshDiscovery(): Promise<Seed[]> {
+  const results = await Promise.allSettled([
+    fetchMostAdvanced(),
+    fetchYahooDayGainers(),
+    fetchFullUsTop(),
+  ]);
+
+  const lists = results
+    .filter((r): r is PromiseFulfilledResult<Seed[]> => r.status === "fulfilled")
+    .map((r) => r.value);
+
+  const merged = mergeSeeds(...lists);
+  if (merged.length) {
+    discoveryCache = { seeds: merged, at: Date.now() };
+    return merged;
+  }
+
+  if (discoveryCache?.seeds.length) {
+    // Keep prior discovery symbols briefly if every proxy failed this tick
+    return discoveryCache.seeds;
+  }
+
+  const errs = results
+    .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
+  throw new Error(`Live discovery failed (${errs[0] || "empty"})`);
+}
+
+async function getDiscoverySeeds(): Promise<Seed[]> {
+  if (discoveryCache && Date.now() - discoveryCache.at < DISCOVERY_TTL_MS && discoveryCache.seeds.length) {
+    return discoveryCache.seeds;
+  }
+  return refreshDiscovery();
 }
 
 type LiveQuote = {
@@ -151,7 +225,7 @@ type LiveQuote = {
 
 async function fetchYahooQuote(symbol: string): Promise<LiveQuote | null> {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`;
-  const res = await fetchViaProxy(url, 4500);
+  const res = await fetchViaProxy(url, 5000);
   const data = await res.json();
   const result = data?.chart?.result?.[0];
   if (!result?.meta) return null;
@@ -174,7 +248,8 @@ async function fetchYahooQuote(symbol: string): Promise<LiveQuote | null> {
     lows.length || metaLow
       ? Math.min(last, metaLow || last, ...(lows.length ? lows : [last]))
       : last;
-  const volume = Number(meta.regularMarketVolume) || volumes.reduce((a: number, b: number) => a + b, 0) || 0;
+  const volume =
+    Number(meta.regularMarketVolume) || volumes.reduce((a: number, b: number) => a + b, 0) || 0;
 
   const prePrice = meta.preMarketPrice != null ? Number(meta.preMarketPrice) : null;
   const prePct =
@@ -206,33 +281,50 @@ async function fetchYahooQuote(symbol: string): Promise<LiveQuote | null> {
   };
 }
 
-/** Nasdaq realtime last as backup when Yahoo proxy flakes. Prev close from Yahoo preferred. */
-async function fetchNasdaqInfo(symbol: string): Promise<{
-  last: number;
-  volume: number;
-  dayHigh: number;
-  dayLow: number;
-  name: string;
-  changePct: number | null;
-} | null> {
+async function fetchNasdaqInfo(symbol: string): Promise<LiveQuote | null> {
   const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/info?assetclass=stocks`;
-  const res = await fetchViaProxy(url, 4000);
+  const res = await fetchViaProxy(url, 4500);
   const data = await res.json();
   const primary = data?.data?.primaryData;
   if (!primary) return null;
   const last = parseMoney(primary.lastSalePrice);
-  if (!(last > 0)) return null;
+  const changePct = primary.percentageChange ? parseMoney(primary.percentageChange) : NaN;
+  if (!(last > 0) || !(changePct > 0)) return null;
+  const prevClose = last / (1 + changePct / 100);
   const range = String(data?.data?.keyStats?.dayrange?.value || "");
   const [lo, hi] = range.split(/\s*-\s*/).map((x: string) => parseMoney(x));
-  const pct = primary.percentageChange ? parseMoney(primary.percentageChange) : null;
+  const dayHigh = hi || last;
+  const dayLow = lo || last;
+  const hodDistancePct = dayHigh > 0 ? ((dayHigh - last) / dayHigh) * 100 : 0;
   return {
-    last,
-    volume: parseMoney(primary.volume),
-    dayHigh: hi || last,
-    dayLow: lo || last,
+    symbol,
     name: data?.data?.companyName || symbol,
-    changePct: pct != null && Number.isFinite(pct) ? pct : null,
+    last,
+    prevClose,
+    dayHigh,
+    dayLow,
+    volume: parseMoney(primary.volume),
+    dayChangePct: changePct,
+    gapPct: changePct,
+    prePct: null,
+    prePrice: null,
+    hodDistancePct,
+    hodGainPct: ((dayHigh - prevClose) / prevClose) * 100,
   };
+}
+
+async function liveQuoteFor(symbol: string): Promise<LiveQuote | null> {
+  try {
+    const y = await fetchYahooQuote(symbol);
+    if (y) return y;
+  } catch {
+    /* nasdaq backup */
+  }
+  try {
+    return await fetchNasdaqInfo(symbol);
+  } catch {
+    return null;
+  }
 }
 
 function toMover(q: LiveQuote, changePct: number, price = q.last): StockMover {
@@ -276,65 +368,18 @@ async function mapPool<T, R>(items: T[], concurrency: number, fn: (t: T) => Prom
   return out;
 }
 
-async function liveQuoteFor(symbol: string, name: string): Promise<LiveQuote | null> {
-  // Prefer Yahoo (TradingView-accurate prevClose). Fall back to Nasdaq info % only if synced.
-  try {
-    const y = await fetchYahooQuote(symbol);
-    if (y) return y;
-  } catch {
-    /* try nasdaq */
-  }
-
-  try {
-    const n = await fetchNasdaqInfo(symbol);
-    if (!n || !(n.last > 0) || n.changePct == null || !(n.changePct > 0)) return null;
-    // Infer prevClose from Nasdaq's own last + % so row stays internally consistent
-    const prevClose = n.last / (1 + n.changePct / 100);
-    if (!(prevClose > 0)) return null;
-    const hodDistancePct = n.dayHigh > 0 ? ((n.dayHigh - n.last) / n.dayHigh) * 100 : 0;
-    return {
-      symbol,
-      name: n.name || name,
-      last: n.last,
-      prevClose,
-      dayHigh: n.dayHigh,
-      dayLow: n.dayLow,
-      volume: n.volume,
-      dayChangePct: n.changePct,
-      gapPct: n.changePct,
-      prePct: null,
-      prePrice: null,
-      hodDistancePct,
-      hodGainPct: ((n.dayHigh - prevClose) / prevClose) * 100,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Live scan — never reads local/cached JSON. */
+/** Live scan — prices always fresh; discovery symbol list may reuse ~45s. */
 export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   const session = sessionNow();
-
-  const [advanced, full] = await Promise.all([
-    fetchMostAdvanced().catch(() => [] as Seed[]),
-    fetchFullUsScreener().catch(() => [] as Seed[]),
-  ]);
-
-  const seen = new Set<string>();
-  const candidates: Seed[] = [];
-  for (const s of [...advanced, ...full]) {
-    if (seen.has(s.symbol)) continue;
-    seen.add(s.symbol);
-    candidates.push(s);
-    if (candidates.length >= 50) break;
-  }
+  const candidates = await getDiscoverySeeds();
   if (!candidates.length) throw new Error("Live discovery returned no US gainers");
 
+  // Quote the top discovery names every tick (live prices)
+  const quoteTargets = candidates.slice(0, 30);
   const quotes = (
-    await mapPool(candidates, 5, async (seed) => {
+    await mapPool(quoteTargets, 4, async (seed) => {
       try {
-        return await liveQuoteFor(seed.symbol, seed.name);
+        return await liveQuoteFor(seed.symbol);
       } catch {
         return null;
       }
@@ -342,7 +387,7 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   ).filter(Boolean) as LiveQuote[];
 
   if (quotes.length < 3) {
-    throw new Error(`Live quotes unavailable (${quotes.length}) — not using cache`);
+    throw new Error(`Live quotes unavailable (${quotes.length})`);
   }
 
   let premarket: StockMover[] = [];
@@ -379,7 +424,6 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   };
 }
 
-/** @deprecated Snapshot URL kept only for optional news hydration — movers never use it. */
 export function liveJsonUrl(): string {
   const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
   return `${base}/data/live.json?t=${Date.now()}`;

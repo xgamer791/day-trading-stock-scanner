@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { NewsFeed, PanelHeader, SessionBadge, StockTable } from "@/components/Panels";
 import { fetchLiveScannerClient } from "@/lib/liveClient";
 import type { MarketSession, ScannerPayload } from "@/lib/types";
@@ -30,6 +30,7 @@ export function ScannerBoard() {
   const [error, setError] = useState<string | null>(null);
   const [mobileTab, setMobileTab] = useState<"news" | "pre" | "mkt">("mkt");
   const [clockSession, setClockSession] = useState<MarketSession>(localSession);
+  const inFlight = useRef(false);
 
   useEffect(() => {
     const id = setInterval(() => setClockSession(localSession()), 1000);
@@ -40,8 +41,9 @@ export function ScannerBoard() {
     let cancelled = false;
 
     const tick = async () => {
+      if (inFlight.current) return;
+      inFlight.current = true;
       try {
-        // LIVE ONLY — never read live.json / snapshots / cached movers
         const live = await fetchLiveScannerClient();
         if (cancelled) return;
 
@@ -60,13 +62,15 @@ export function ScannerBoard() {
         if (cancelled) return;
         setConnected(false);
         setError(err instanceof Error ? err.message : "Failed to load live data");
-        // No snapshot fallback — leave screen empty until a fresh live tick succeeds
-        if (!cancelled) setData(null);
+        // Keep last successful LIVE tick on screen while reconnecting —
+        // never substitute a built snapshot / live.json cache.
+      } finally {
+        inFlight.current = false;
       }
     };
 
     tick();
-    const id = setInterval(tick, 3000);
+    const id = setInterval(tick, 4000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -115,7 +119,7 @@ export function ScannerBoard() {
               Top Gainers
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-              Live only · Top 20 · Entire US market
+              Live quotes · Top 20 · Entire US market
             </div>
           </div>
           <SessionBadge session={session} />
@@ -151,12 +155,12 @@ export function ScannerBoard() {
               color: "var(--hod)",
             }}
           >
-            NO CACHE
+            LIVE QUOTES
           </span>
         </div>
       </div>
 
-      {error && (
+      {error && !data && (
         <div
           style={{
             padding: "14px 20px",
@@ -168,6 +172,21 @@ export function ScannerBoard() {
           }}
         >
           Live data error: {error}
+        </div>
+      )}
+
+      {error && data && (
+        <div
+          style={{
+            padding: "8px 20px",
+            background: "var(--red-dim)",
+            color: "var(--red)",
+            fontSize: 12,
+            fontWeight: 600,
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          Reconnecting… showing last live tick ({error})
         </div>
       )}
 
@@ -231,7 +250,7 @@ export function ScannerBoard() {
           />
           <StockTable
             rows={data?.premarket ?? []}
-            emptyText={error ? "Live data error" : "No premarket gainers right now"}
+            emptyText={error && !data ? "Live data error" : "No premarket gainers right now"}
           />
         </section>
 
@@ -251,7 +270,7 @@ export function ScannerBoard() {
           <StockTable
             rows={data?.gainers ?? []}
             emptyText={
-              error
+              error && !data
                 ? "Live data error"
                 : session === "premarket"
                   ? "Market not open yet"
