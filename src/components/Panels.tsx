@@ -219,10 +219,6 @@ export function StockTable({
             }}
           >
             {formatPrice(row.price)}
-            <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-dim)", marginTop: 2 }}>
-              {row.change >= 0 ? "+" : ""}
-              {formatPrice(Math.abs(row.change))}
-            </div>
           </div>
           <div
             style={{
