@@ -74,13 +74,11 @@ export async function fetchGainersSnapshots(limit = 50): Promise<StockMover[]> {
   const movers = (data.tickers ?? [])
     .map(snapshotToMover)
     .filter((m): m is StockMover => Boolean(m));
-  return filterHodGainers(movers, { minChangePct: 2, minVolume: 1000 }).slice(0, limit);
+  return filterHodGainers(movers, { minChangePct: 0, limit }).slice(0, limit);
 }
 
-/** Premarket / unified snapshot scan — prefer gainers list then HOD filter. */
+/** Premarket / session top gainers — % rank only. */
 export async function fetchPremarketHod(limit = 50): Promise<StockMover[]> {
-  // Polygon gainers snapshot reflects the active session; during premarket
-  // these are premarket movers. We still enforce HOD peaking.
   const data = await polygonGet<SnapshotResponse>(
     "/v2/snapshot/locale/us/markets/stocks/gainers",
   );
@@ -88,13 +86,7 @@ export async function fetchPremarketHod(limit = 50): Promise<StockMover[]> {
     .map(snapshotToMover)
     .filter((m): m is StockMover => Boolean(m));
 
-  // Slightly looser % in premarket so early runners still appear
-  const session = getMarketSession();
-  const minChangePct = session === "premarket" ? 3 : 5;
-  return filterHodGainers(movers, { minChangePct, minVolume: 1000, maxPrice: 100 }).slice(
-    0,
-    limit,
-  );
+  return filterHodGainers(movers, { minChangePct: 0, limit }).slice(0, limit);
 }
 
 type PolygonNews = {

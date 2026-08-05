@@ -57,12 +57,7 @@ export function buildFromPolygon(
     .filter((m): m is StockMover => Boolean(m));
 
   const session = getMarketSession();
-  const minChangePct = session === "premarket" ? 3 : 2;
-  const hod = filterHodGainers(movers, {
-    minChangePct,
-    minVolume: 1000,
-    maxPrice: 500,
-  });
+  const top = filterHodGainers(movers, { minChangePct: 0, limit: 20 });
 
   const news: NewsItem[] = (newsJson.results ?? []).map((n) => ({
     id: n.id,
@@ -79,7 +74,7 @@ export function buildFromPolygon(
     updatedAt: new Date().toISOString(),
     source: "polygon",
     news,
-    premarket: hod.filter((m) => m.price < 100).slice(0, 40),
-    gainers: hod.slice(0, 40),
+    premarket: top,
+    gainers: top,
   };
 }

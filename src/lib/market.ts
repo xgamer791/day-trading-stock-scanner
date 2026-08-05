@@ -1,7 +1,7 @@
 import type { MarketSession, StockMover } from "./types";
 
-/** Stocks within this % of day high count as "peaking" / HOD. */
-export const HOD_TOLERANCE_PCT = 0.35;
+/** Informational only — HOD is displayed, not used as a hard filter. */
+export const HOD_TOLERANCE_PCT = 2.0;
 
 export function getMarketSession(now = new Date()): MarketSession {
   // US/Eastern approximations via Intl
@@ -63,28 +63,20 @@ export function toMover(raw: {
   };
 }
 
-/** High-of-day peaking gainers only. */
+/** Top % gainers only — no HOD / price / volume gates. */
 export function filterHodGainers(
   movers: StockMover[],
-  opts: { minChangePct?: number; minVolume?: number; minPrice?: number; maxPrice?: number } = {},
+  opts: { minChangePct?: number; minVolume?: number; minPrice?: number; maxPrice?: number; limit?: number } = {},
 ): StockMover[] {
-  const {
-    minChangePct = 1,
-    minVolume = 1_000,
-    minPrice = 0.5,
-    maxPrice = 500,
-  } = opts;
+  const { minChangePct = 0, limit = 20 } = opts;
+  void opts.minVolume;
+  void opts.minPrice;
+  void opts.maxPrice;
 
   return movers
-    .filter(
-      (m) =>
-        m.atHod &&
-        m.changePct >= minChangePct &&
-        m.volume >= minVolume &&
-        m.price >= minPrice &&
-        m.price <= maxPrice,
-    )
-    .sort((a, b) => b.changePct - a.changePct);
+    .filter((m) => m.changePct > minChangePct && m.price > 0)
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, limit);
 }
 
 export function formatPct(n: number): string {

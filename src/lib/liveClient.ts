@@ -1,11 +1,11 @@
 /**
- * Browser-side full-US-market HOD scanner.
- * Pulls Nasdaq.com composite market movers (NYSE / NASDAQ / AMEX / etc.)
- * and confirms high-of-day with Yahoo 1m charts via CORS proxies.
+ * Browser-side full-US-market top-gainers scanner.
+ * Mirrors Realtime Screener: Nasdaq Most Advanced + full composite screener,
+ * ranked by % gain only (no HOD / price / volume gates).
  */
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
-const HOD_TOLERANCE_PCT = 2.0;
+const FEED_LIMIT = 20;
 
 function proxies(url: string): string[] {
   const enc = encodeURIComponent(url);
@@ -28,7 +28,6 @@ async function fetchViaProxy(url: string): Promise<Response> {
         continue;
       }
       const text = await res.text();
-      // corsproxy sometimes returns HTML interstitial
       if (text.trimStart().startsWith("<!DOCTYPE") || text.trimStart().startsWith("<html")) {
         lastErr = new Error("proxy returned HTML");
         continue;
@@ -51,12 +50,17 @@ function parseMoney(v: unknown): number {
 }
 
 function isJunk(sym: string, name = ""): boolean {
-  const s = sym || "";
-  const n = name.toLowerCase();
+  const s = (sym || "").toUpperCase();
+  const n = (name || "").toLowerCase();
   if (!s || /[.=]/.test(s)) return true;
-  if (/(WW|WS|WT)$/.test(s)) return true;
+  if (/(WW|WS|WT|WR)$/.test(s)) return true;
   if (s.length >= 5 && s.endsWith("W")) return true;
   if (n.includes("warrant") || n.includes(" unit") || n.includes("right")) return true;
+  if (n.includes("preferred") || n.includes(" preference")) return true;
+  if (/\betf\b|\betn\b|leveraged|direxion|proshares|graniteshares/.test(n)) return true;
+  if (s.length >= 5 && s.endsWith("Z") && !n.includes("ordinary") && !n.includes("common")) {
+    return true;
+  }
   return false;
 }
 
@@ -79,34 +83,55 @@ function sessionNow(): ScannerPayload["session"] {
   return "closed";
 }
 
-type MoverSeed = { symbol: string; name: string; changePct: number | null };
+type Seed = {
+  symbol: string;
+  name: string;
+  changePct: number;
+  price: number;
+  volume: number;
+};
 
-async function fetchMarketMovers(): Promise<MoverSeed[]> {
+async function fetchMostAdvanced(): Promise<Seed[]> {
   const url = "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50";
   const res = await fetchViaProxy(url);
   const data = await res.json();
-  const stocks = data?.data?.STOCKS;
-  if (!stocks) throw new Error("No STOCKS in market movers");
-
-  const out: MoverSeed[] = [];
-  for (const key of [
-    "MostAdvanced",
-    "MostActiveByShareVolume",
-    "MostActiveByDollarVolume",
-    "Nasdaq100Movers",
-  ] as const) {
-    const rows = stocks[key]?.table?.rows || [];
-    const isVol = key.includes("ShareVolume");
-    for (const r of rows) {
-      if (isJunk(r.symbol, r.name)) continue;
-      out.push({
-        symbol: String(r.symbol).replace("/", "-"),
-        name: r.name || r.symbol,
-        changePct: isVol ? null : parseMoney(r.change),
-      });
-    }
+  const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
+  const out: Seed[] = [];
+  for (const r of rows) {
+    if (isJunk(r.symbol, r.name)) continue;
+    const changePct = parseMoney(r.change);
+    if (!(changePct > 0)) continue;
+    out.push({
+      symbol: String(r.symbol).replace("/", "-").toUpperCase(),
+      name: r.name || r.symbol,
+      changePct,
+      price: parseMoney(r.lastSalePrice),
+      volume: parseMoney(r.volume),
+    });
   }
-  if (!out.length) throw new Error("Empty market movers");
+  return out;
+}
+
+/** Full composite US screener (all exchanges) — best-effort via CORS proxy. */
+async function fetchFullUsScreener(): Promise<Seed[]> {
+  const url =
+    "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&offset=0&download=true";
+  const res = await fetchViaProxy(url);
+  const data = await res.json();
+  const rows = data?.data?.rows || [];
+  const out: Seed[] = [];
+  for (const r of rows) {
+    if (isJunk(r.symbol, r.name)) continue;
+    const changePct = parseMoney(r.pctchange);
+    if (!(changePct > 0)) continue;
+    out.push({
+      symbol: String(r.symbol).replace("/", "-").toUpperCase(),
+      name: r.name || r.symbol,
+      changePct,
+      price: parseMoney(r.lastsale),
+      volume: parseMoney(r.volume),
+    });
+  }
   return out;
 }
 
@@ -123,7 +148,6 @@ async function fetchYahooQuote(symbol: string): Promise<{
   prePct: number | null;
   prePrice: number | null;
   hodDistancePct: number;
-  atHod: boolean;
 } | null> {
   const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`;
   const res = await fetchViaProxy(url);
@@ -155,7 +179,7 @@ async function fetchYahooQuote(symbol: string): Promise<{
 
   const dayChangePct = ((last - prevClose) / prevClose) * 100;
   const gapPct = ((sessionOpen - prevClose) / prevClose) * 100;
-  const hodDistancePct = ((dayHigh - last) / dayHigh) * 100;
+  const hodDistancePct = dayHigh > 0 ? ((dayHigh - last) / dayHigh) * 100 : 0;
 
   return {
     symbol,
@@ -170,46 +194,50 @@ async function fetchYahooQuote(symbol: string): Promise<{
     prePct,
     prePrice,
     hodDistancePct,
-    atHod: hodDistancePct <= HOD_TOLERANCE_PCT,
   };
 }
 
-function toMover(
-  q: NonNullable<Awaited<ReturnType<typeof fetchYahooQuote>>>,
-  changePct: number,
-  price = q.last,
-): StockMover {
-  const dayHigh = Math.max(q.dayHigh, price);
-  const hodDistancePct = ((dayHigh - price) / dayHigh) * 100;
+function seedToMover(seed: Seed, q: Awaited<ReturnType<typeof fetchYahooQuote>>): StockMover {
+  const price = q?.last && q.last > 0 ? q.last : seed.price;
+  const prevClose =
+    q?.prevClose && q.prevClose > 0 ? q.prevClose : price / (1 + seed.changePct / 100 || 1);
+  const dayHigh = q?.dayHigh && q.dayHigh > 0 ? Math.max(q.dayHigh, price) : price;
+  const dayLow = q?.dayLow && q.dayLow > 0 ? q.dayLow : price;
+  const volume = q?.volume && q.volume > 0 ? q.volume : seed.volume || 0;
+  const hodDistancePct = dayHigh > 0 ? ((dayHigh - price) / dayHigh) * 100 : 0;
+
   return {
-    symbol: q.symbol,
-    name: q.name,
+    symbol: seed.symbol,
+    name: q?.name || seed.name,
     price,
-    changePct,
-    change: price - q.prevClose,
-    volume: q.volume,
+    changePct: seed.changePct,
+    change: price - prevClose,
+    volume,
     dayHigh,
-    dayLow: q.dayLow,
-    prevClose: q.prevClose,
+    dayLow,
+    prevClose,
     floatMillions: null,
     hodDistancePct,
-    atHod: hodDistancePct <= HOD_TOLERANCE_PCT,
+    atHod: hodDistancePct <= 2,
     updatedAt: new Date().toISOString(),
   };
 }
 
-function hodRank(rows: StockMover[], minChangePct: number): StockMover[] {
-  return rows
-    .filter(
-      (m) =>
-        m.atHod &&
-        m.changePct >= minChangePct &&
-        m.price >= 0.5 &&
-        m.price <= 1000 &&
-        m.volume >= 1000,
-    )
+function topGainers(rows: StockMover[]): StockMover[] {
+  return [...rows]
+    .filter((m) => m.changePct > 0 && m.price > 0)
     .sort((a, b) => b.changePct - a.changePct)
-    .slice(0, 20);
+    .slice(0, FEED_LIMIT);
+}
+
+function mergeSeeds(full: Seed[], advanced: Seed[]): Seed[] {
+  const map = new Map<string, Seed>();
+  for (const s of full) map.set(s.symbol, s);
+  for (const s of advanced) {
+    const prev = map.get(s.symbol);
+    map.set(s.symbol, { ...(prev || s), ...s, volume: s.volume || prev?.volume || 0 });
+  }
+  return [...map.values()].sort((a, b) => b.changePct - a.changePct);
 }
 
 async function mapPool<T, R>(items: T[], concurrency: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -221,38 +249,69 @@ async function mapPool<T, R>(items: T[], concurrency: number, fn: (t: T) => Prom
   return out;
 }
 
-/** Live scan across all US listings exposed by Nasdaq.com composite movers. */
+/** Live scan across the entire US composite market. */
 export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
   const session = sessionNow();
-  const seeds = await fetchMarketMovers();
-  const symbols = [...new Set(seeds.map((s) => s.symbol))].slice(0, 80);
 
-  const quotes = (
-    await mapPool(symbols, 6, async (sym) => {
-      try {
-        return await fetchYahooQuote(sym);
-      } catch {
-        return null;
-      }
-    })
-  ).filter(Boolean) as NonNullable<Awaited<ReturnType<typeof fetchYahooQuote>>>[];
+  let advanced: Seed[] = [];
+  let full: Seed[] = [];
 
-  if (quotes.length < 5) {
-    throw new Error(`Live quote confirmation failed (${quotes.length} quotes)`);
+  try {
+    advanced = await fetchMostAdvanced();
+  } catch {
+    /* snapshot fallback upstream */
   }
 
-  let premarketRaw: StockMover[] = [];
-  let gainersRaw: StockMover[] = [];
+  // Full screener is large; try briefly, Most Advanced alone still covers top runners
+  try {
+    full = await Promise.race([
+      fetchFullUsScreener(),
+      new Promise<Seed[]>((_, rej) => setTimeout(() => rej(new Error("screener timeout")), 2200)),
+    ]);
+  } catch {
+    full = [];
+  }
+
+  const merged = mergeSeeds(full, advanced);
+  if (!merged.length) throw new Error("No US market gainers from Nasdaq");
+
+  const candidates = merged.slice(0, 40);
+  const quotes = await mapPool(candidates, 6, async (seed) => {
+    try {
+      return await fetchYahooQuote(seed.symbol);
+    } catch {
+      return null;
+    }
+  });
+  const quoteMap = new Map(
+    quotes.filter(Boolean).map((q) => [q!.symbol, q!] as const),
+  );
+
+  let premarket: StockMover[] = [];
+  let gainers: StockMover[] = [];
 
   if (session === "premarket") {
-    premarketRaw = quotes.map((q) => {
-      const pct = q.prePct != null ? q.prePct : q.dayChangePct;
-      const price = q.prePrice != null ? q.prePrice : q.last;
-      return toMover(q, pct, price);
-    });
+    premarket = topGainers(
+      candidates.map((seed) => {
+        const q = quoteMap.get(seed.symbol);
+        if (q && q.prePct != null) {
+          return seedToMover(
+            { ...seed, changePct: q.prePct, price: q.prePrice ?? q.last },
+            { ...q, last: q.prePrice ?? q.last },
+          );
+        }
+        return seedToMover(seed, q ?? null);
+      }),
+    );
   } else if (session !== "closed") {
-    premarketRaw = quotes.map((q) => toMover(q, q.gapPct));
-    gainersRaw = quotes.map((q) => toMover(q, q.dayChangePct));
+    gainers = topGainers(candidates.map((seed) => seedToMover(seed, quoteMap.get(seed.symbol) ?? null)));
+    premarket = topGainers(
+      candidates.map((seed) => {
+        const q = quoteMap.get(seed.symbol);
+        if (q) return seedToMover({ ...seed, changePct: q.gapPct }, q);
+        return seedToMover(seed, null);
+      }),
+    );
   }
 
   const news: NewsItem[] = [];
@@ -262,8 +321,8 @@ export async function fetchLiveScannerClient(): Promise<ScannerPayload> {
     updatedAt: new Date().toISOString(),
     source: "full-us-realtime",
     news,
-    premarket: hodRank(premarketRaw, session === "premarket" ? 2 : 3),
-    gainers: session === "premarket" || session === "closed" ? [] : hodRank(gainersRaw, 2),
+    premarket,
+    gainers,
   };
 }
 

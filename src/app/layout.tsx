@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "HOD Scanner — Day Trading Stock Screener",
+  title: "Top Gainers — Day Trading Stock Screener",
   description:
-    "Real-time high-of-day stock scanner: breaking news, premarket HOD gainers, and market top gainers.",
+    "Real-time top gainers across the entire US market: breaking news, premarket movers, and market top % gainers.",
 };
 
 export default function RootLayout({

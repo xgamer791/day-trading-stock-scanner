@@ -1,29 +1,30 @@
 import assert from "node:assert/strict";
 import { filterHodGainers, getMarketSession, toMover } from "../src/lib/market";
 
-function testHodFilterKeepsPeaksOnly() {
-  const peak = toMover({
-    symbol: "PEAK",
+function testTopGainersRanksByPct() {
+  const a = toMover({
+    symbol: "BIG",
     price: 10,
-    prevClose: 8,
-    dayHigh: 10,
-    dayLow: 8,
-    volume: 2_000_000,
+    prevClose: 5,
+    dayHigh: 12,
+    dayLow: 5,
+    volume: 100,
   });
-  const off = toMover({
-    symbol: "OFF",
+  const b = toMover({
+    symbol: "MID",
     price: 9,
     prevClose: 8,
     dayHigh: 10,
     dayLow: 8,
-    volume: 2_000_000,
+    volume: 50,
   });
-  assert.ok(peak);
-  assert.ok(off);
-  const hits = filterHodGainers([peak!, off!], { minChangePct: 1, minVolume: 1000 });
-  assert.equal(hits.length, 1);
-  assert.equal(hits[0].symbol, "PEAK");
-  assert.equal(hits[0].atHod, true);
+  assert.ok(a);
+  assert.ok(b);
+  // Both kept even if off HOD / low volume — top % only
+  const hits = filterHodGainers([b!, a!], { minChangePct: 0 });
+  assert.equal(hits.length, 2);
+  assert.equal(hits[0].symbol, "BIG");
+  assert.equal(hits[1].symbol, "MID");
 }
 
 function testLoserRejected() {
@@ -36,21 +37,8 @@ function testLoserRejected() {
     volume: 5_000_000,
   });
   assert.ok(down);
-  const hits = filterHodGainers([down!], { minChangePct: 1 });
+  const hits = filterHodGainers([down!], { minChangePct: 0 });
   assert.equal(hits.length, 0);
-}
-
-function testNearHodTolerance() {
-  // Within 0.35% of high should count as HOD
-  const near = toMover({
-    symbol: "NEAR",
-    price: 99.7,
-    prevClose: 90,
-    dayHigh: 100,
-    dayLow: 90,
-    volume: 3_000_000,
-  });
-  assert.ok(near?.atHod);
 }
 
 function testSessionHelper() {
@@ -58,8 +46,7 @@ function testSessionHelper() {
   assert.ok(["premarket", "regular", "afterhours", "closed"].includes(session));
 }
 
-testHodFilterKeepsPeaksOnly();
+testTopGainersRanksByPct();
 testLoserRejected();
-testNearHodTolerance();
 testSessionHelper();
 console.log("ok");

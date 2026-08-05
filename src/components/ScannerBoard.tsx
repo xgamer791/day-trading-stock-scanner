@@ -68,7 +68,7 @@ async function loadScanner(): Promise<ScannerPayload> {
     !snapshot.premarket?.length &&
     localSession() === "regular"
   ) {
-    throw new Error("Live market data returned no HOD movers");
+    throw new Error("Live market data returned no top gainers");
   }
   return snapshot;
 }
@@ -128,7 +128,7 @@ export function ScannerBoard() {
       : data?.source === "polygon"
         ? "POLYGON"
         : data
-          ? "HOD LIVE"
+          ? "TOP GAINERS"
           : "LOADING";
 
   return (
@@ -158,10 +158,10 @@ export function ScannerBoard() {
                 lineHeight: 1,
               }}
             >
-              HOD Scanner
+              Top Gainers
             </div>
             <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>
-            High-of-day only · Top 20 · Full US markets
+              Top 20 · Entire US market · All exchanges
             </div>
           </div>
           <SessionBadge session={session} />
@@ -270,14 +270,14 @@ export function ScannerBoard() {
             title="Premarket"
             subtitle={
               session === "premarket"
-                ? "Top 20 premarket HOD peaks — all US markets"
-                : "Top 20 gap plays still at high of day"
+                ? "Top 20 premarket gainers — entire US market"
+                : "Top 20 gap leaders — entire US market"
             }
             count={data?.premarket.length ?? 0}
           />
           <StockTable
             rows={data?.premarket ?? []}
-            emptyText={error ? "Live data error" : "No premarket HOD peaks right now"}
+            emptyText={error ? "Live data error" : "No premarket gainers right now"}
           />
         </section>
 
@@ -289,8 +289,8 @@ export function ScannerBoard() {
             title="Market Top Gainers"
             subtitle={
               session === "premarket"
-                ? "Opens 9:30 AM ET — top 20 open-market HOD"
-                : "Top 20 open-market HOD peaks — full US"
+                ? "Opens 9:30 AM ET — top 20 open-market gainers"
+                : "Top 20 % gainers — entire US market (all exchanges)"
             }
             count={data?.gainers.length ?? 0}
           />
@@ -303,7 +303,7 @@ export function ScannerBoard() {
                   ? "Market not open yet"
                   : session === "closed"
                     ? "Market closed"
-                    : "Loading HOD gainers…"
+                    : "Loading top gainers…"
             }
           />
         </section>
