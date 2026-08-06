@@ -1,6 +1,31 @@
+import { execSync } from "node:child_process";
 import type { NextConfig } from "next";
 
 const repo = "day-trading-stock-scanner";
+
+/**
+ * Commit the bundle was built from.
+ *
+ * A timestamp alone only proves *when* you built — building stale code still
+ * produces a fresh stamp. The short SHA is what actually answers "is the phone
+ * running the latest commit", which cost us several debugging rounds. `-dirty`
+ * marks uncommitted local edits.
+ */
+function gitStamp(): string {
+  try {
+    const sha = execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+    const dirty = execSync("git status --porcelain", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim()
+      ? "-dirty"
+      : "";
+    return `${sha}${dirty}`;
+  } catch {
+    return "nogit";
+  }
+}
 
 /**
  * Two static-export targets from one codebase:
@@ -27,7 +52,9 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_CAPACITOR_BUILD: isNative ? "true" : "",
     // Stamped at build time and shown in the drawer + Connection screen, so
     // "which build is this phone actually running" is answerable at a glance.
-    NEXT_PUBLIC_BUILD_STAMP: new Date().toISOString().slice(0, 16).replace("T", " ") + "Z",
+    // Commit first — that is the part that proves the code is current.
+    NEXT_PUBLIC_BUILD_STAMP:
+      gitStamp() + " · " + new Date().toISOString().slice(0, 16).replace("T", " ") + "Z",
   },
 };
 
