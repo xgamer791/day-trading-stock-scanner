@@ -18,7 +18,7 @@ type HeldBoard = {
   rows: StockMover[];
 };
 
-const PREFIX = "dts-session-board-v1:";
+const PREFIX = "dts-session-board-v2:";
 
 function storageKey(kind: SessionBoardKind): string {
   return `${PREFIX}${kind}`;
@@ -26,6 +26,25 @@ function storageKey(kind: SessionBoardKind): string {
 
 function canUseStorage(): boolean {
   return typeof sessionStorage !== "undefined";
+}
+
+/** Higher = more Realtime-like (extreme % runners present). */
+export function boardQuality(rows: StockMover[]): number {
+  if (!rows?.length) return 0;
+  const top = Number(rows[0]?.changePct) || 0;
+  const hot50 = rows.filter((r) => r.changePct >= 50).length;
+  const hot100 = rows.filter((r) => r.changePct >= 100).length;
+  return top + hot50 * 25 + hot100 * 50;
+}
+
+/** Do not let a weak Yahoo-only board overwrite a strong Most-Advanced-enriched hold. */
+export function shouldReplaceHeldBoard(incoming: StockMover[], held: StockMover[]): boolean {
+  if (!incoming.length) return false;
+  if (!held.length) return true;
+  const qIn = boardQuality(incoming);
+  const qHeld = boardQuality(held);
+  // Require incoming to be roughly as strong (allow small decay).
+  return qIn >= qHeld * 0.7;
 }
 
 export function readHeldBoard(kind: SessionBoardKind, now = new Date()): StockMover[] {

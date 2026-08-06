@@ -7,11 +7,27 @@ import { fetchLiveNewsFeed, fetchLiveNewsFeedQuick } from "@/lib/fetchLiveNewsFe
 import { fetchLiveScannerClient } from "@/lib/liveClient";
 import { getMarketSession } from "@/lib/market";
 import {
+  boardQuality,
   clearHeldBoards,
   readHeldBoard,
+  shouldReplaceHeldBoard,
   writeHeldBoard,
 } from "@/lib/sessionBoardHold";
 import type { MarketSession, NewsItem, ScannerPayload, StockMover } from "@/lib/types";
+
+/**
+ * Prefer the stronger board so a weak Yahoo-only poll cannot flip the UI off
+ * a Realtime-parity Most-Advanced-enriched list (YXT-class runners).
+ */
+function preferStrongerBoard(
+  live: StockMover[] | undefined,
+  held: StockMover[],
+): StockMover[] {
+  const incoming = live ?? [];
+  if (!incoming.length) return held;
+  if (!held.length) return incoming;
+  return boardQuality(incoming) >= boardQuality(held) * 0.7 ? incoming : held;
+}
 
 export function ScannerBoard() {
   const [data, setData] = useState<ScannerPayload | null>(null);
@@ -90,18 +106,29 @@ export function ScannerBoard() {
         setConnected(true);
         setError(null);
 
-        // Capture last non-empty boards for hold-until-next-premarket.
+        // Capture boards for hold-until-next-premarket — never let a weak
+        // day_gainers-only poll overwrite a strong Most-Advanced-enriched hold
+        // (that is what caused the ~20s correct↔incorrect Gainers rotation).
         if (live.premarket.length) {
-          writeHeldBoard("premarket", live.premarket);
-          setHeldPremarket(live.premarket);
+          setHeldPremarket((prev) => {
+            if (!shouldReplaceHeldBoard(live.premarket, prev)) return prev;
+            writeHeldBoard("premarket", live.premarket);
+            return live.premarket;
+          });
         }
         if (live.gainers.length) {
-          writeHeldBoard("gainers", live.gainers);
-          setHeldGainers(live.gainers);
+          setHeldGainers((prev) => {
+            if (!shouldReplaceHeldBoard(live.gainers, prev)) return prev;
+            writeHeldBoard("gainers", live.gainers);
+            return live.gainers;
+          });
         }
         if (live.afterhours.length) {
-          writeHeldBoard("afterhours", live.afterhours);
-          setHeldAfterhours(live.afterhours);
+          setHeldAfterhours((prev) => {
+            if (!shouldReplaceHeldBoard(live.afterhours, prev)) return prev;
+            writeHeldBoard("afterhours", live.afterhours);
+            return live.afterhours;
+          });
         }
       } catch (err) {
         if (cancelled) return;
@@ -180,37 +207,37 @@ export function ScannerBoard() {
 
   const session = data?.session ?? clockSession;
 
-  // Active session windows: live rows only (no hold fallback on poll failure).
-  // After that window ends: keep last board until next premarket (4:00 AM ET).
+  // Active session: quality-gate successful polls (weak day_gainers-only must not
+  // flip off a strong Most-Advanced merge). Failed poll clears LIVE (`data` null)
+  // — do not paint held as LIVE during an active window (APP_MEMORY).
+  // Closed: keep last strong board until next premarket (4:00 AM ET).
   const premarketRows =
     session === "premarket"
       ? (data?.premarket ?? [])
-      : data?.premarket?.length
-        ? data.premarket
-        : heldPremarket;
+      : preferStrongerBoard(data?.premarket, heldPremarket);
 
   const gainersRows =
     session === "premarket"
       ? []
       : session === "regular" || session === "afterhours"
-        ? (data?.gainers ?? [])
-        : data?.gainers?.length
-          ? data.gainers
-          : heldGainers;
+        ? data
+          ? preferStrongerBoard(data.gainers, heldGainers)
+          : []
+        : preferStrongerBoard(data?.gainers, heldGainers);
 
   const afterhoursRows =
     session === "afterhours"
-      ? (data?.afterhours ?? [])
+      ? data
+        ? preferStrongerBoard(data.afterhours, heldAfterhours)
+        : []
       : session === "closed"
-        ? data?.afterhours?.length
-          ? data.afterhours
-          : heldAfterhours
+        ? preferStrongerBoard(data?.afterhours, heldAfterhours)
         : [];
 
   const premarketHolding = session !== "premarket" && premarketRows.length > 0;
   const gainersHolding = session === "closed" && gainersRows.length > 0;
   const afterhoursHolding =
-    session === "closed" && afterhoursRows.length > 0 && !(data?.afterhours?.length);
+    session === "closed" && afterhoursRows.length > 0;
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>

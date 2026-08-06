@@ -8,6 +8,7 @@
  *  3) Polygon snapshot gainers — durable direct-CORS fallback / parallel live
  *     board when Yahoo proxies fail (NOT Nasdaq Most Advanced, NOT live.json)
  *  4) Yahoo spark for Most Advanced symbols missing from the ranked board (≤30)
+ *     + small unqueued chart fill for names spark still missed (regular last/prev)
  *  5) Live Flt for ranked spark/Polygon rows via small Nasdaq quote summary
  *  6) Rank by same-quote % — top 50
  *  7) After Hours (16:00–20:00 ET + overnight closed): post/extended last vs
@@ -149,24 +150,39 @@ function quoteFromLastPrev(
 }
 
 async function fetchMostAdvanced(): Promise<Seed[]> {
-  const data = (await fetchViaProxy(
-    "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50",
-    14000,
-    "normal",
-  )) as {
+  const parse = (data: {
     data?: { STOCKS?: { MostAdvanced?: { table?: { rows?: Array<Record<string, string>> } } } };
+  }): Seed[] => {
+    const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
+    const out: Seed[] = [];
+    for (const r of rows) {
+      if (isJunk(r.symbol, r.name)) continue;
+      if (!(parseMoney(r.change) > 0 || parseMoney(r.pctchange) > 0)) continue;
+      out.push({
+        symbol: String(r.symbol).replace("/", "-").toUpperCase(),
+        name: r.name || r.symbol,
+      });
+    }
+    return out;
   };
-  const rows = data?.data?.STOCKS?.MostAdvanced?.table?.rows || [];
-  const out: Seed[] = [];
-  for (const r of rows) {
-    if (isJunk(r.symbol, r.name)) continue;
-    if (!(parseMoney(r.change) > 0)) continue;
-    out.push({
-      symbol: String(r.symbol).replace("/", "-").toUpperCase(),
-      name: r.name || r.symbol,
-    });
+
+  const url = "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const data = (await fetchViaProxy(url, 14000, "critical")) as Parameters<typeof parse>[0];
+      const out = parse(data);
+      if (out.length) return out;
+    } catch {
+      /* retry / fallback */
+    }
   }
-  return out;
+  // Unqueued fallback — AH chart traffic must not permanently starve discovery.
+  try {
+    const data = (await fetchAhTransport(url, 12000)) as Parameters<typeof parse>[0];
+    return parse(data);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -602,13 +618,20 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote
   let data: SparkPayload | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      data = (await fetchViaProxy(url, 16000, "normal")) as SparkPayload;
+      data = (await fetchViaProxy(url, 16000, attempt === 0 ? "critical" : "normal")) as SparkPayload;
       break;
     } catch {
       if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
     }
   }
-  if (!data) return new Map();
+  if (!data) {
+    // Unqueued last try — do not leave Most Advanced unquoted overnight.
+    try {
+      data = (await fetchAhTransport(url, 12000)) as SparkPayload;
+    } catch {
+      return new Map();
+    }
+  }
 
   const map = new Map<string, LiveQuote>();
   for (const item of data.spark?.result || []) {
@@ -633,6 +656,45 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote
     );
     if (row) map.set(symbol, row);
   }
+  return map;
+}
+
+/** Regular-session quote from Yahoo chart meta (last vs previousClose — not AH). */
+function regularQuoteFromChart(symbol: string, payload: unknown): LiveQuote | null {
+  const meta = (
+    payload as {
+      chart?: { result?: Array<{ meta?: Record<string, unknown> }> };
+    }
+  )?.chart?.result?.[0]?.meta;
+  if (!meta) return null;
+  const name = String(meta.shortName || meta.longName || symbol);
+  if (isJunk(symbol, name)) return null;
+  const last = Number(meta.regularMarketPrice) || 0;
+  const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
+  const dayHigh = Number(meta.regularMarketDayHigh) || last;
+  const dayLow = Number(meta.regularMarketDayLow) || last;
+  const volume = Number(meta.regularMarketVolume) || 0;
+  return quoteFromLastPrev(symbol, name, last, prevClose, dayHigh, dayLow, volume, null);
+}
+
+/**
+ * Chart fill for Most Advanced symbols spark missed. Unqueued + small budget so
+ * we do not starve day_gainers, but still recover YXT-class runners overnight.
+ */
+async function fetchRegularChartQuotes(symbols: string[]): Promise<Map<string, LiveQuote>> {
+  const uniq = [...new Set(symbols.map((s) => s.toUpperCase()).filter(Boolean))].slice(0, 12);
+  const map = new Map<string, LiveQuote>();
+  if (!uniq.length) return map;
+
+  const deadline = Date.now() + 6_000;
+  const rows = await mapPool(uniq, 4, deadline, async (symbol) => {
+    const payload = await fetchAhTransport(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d`,
+      8000,
+    );
+    return regularQuoteFromChart(symbol, payload);
+  });
+  for (const row of rows) map.set(row.symbol, row);
   return map;
 }
 
@@ -876,6 +938,17 @@ export async function fetchLiveScannerClient(
       for (const [sym, q] of spark) quotes.set(sym, q);
     } catch {
       /* ranked board still valid without spark fill */
+    }
+  }
+
+  // Chart fill for Most Advanced still missing after spark (proxy flake overnight).
+  const stillMissing = advanced.map((s) => s.symbol).filter((s) => !quotes.has(s));
+  if (stillMissing.length) {
+    try {
+      const charts = await fetchRegularChartQuotes(stillMissing);
+      for (const [sym, q] of charts) quotes.set(sym, q);
+    } catch {
+      /* ranked board still valid */
     }
   }
 
