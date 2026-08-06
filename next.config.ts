@@ -25,6 +25,9 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_BASE_PATH: basePath,
     NEXT_PUBLIC_CAPACITOR_BUILD: isNative ? "true" : "",
+    // Stamped at build time and shown in the drawer + Connection screen, so
+    // "which build is this phone actually running" is answerable at a glance.
+    NEXT_PUBLIC_BUILD_STAMP: new Date().toISOString().slice(0, 16).replace("T", " ") + "Z",
   },
 };
 

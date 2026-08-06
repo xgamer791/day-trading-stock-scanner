@@ -283,6 +283,8 @@ export function SideMenu({
         <p className="drawer__foot">
           Live data only — no cached or delayed quotes. A failed poll clears the board rather
           than showing stale prices.
+          <br />
+          <span style={{ opacity: 0.7 }}>Build {process.env.NEXT_PUBLIC_BUILD_STAMP}</span>
         </p>
       </aside>
     </>

@@ -22,11 +22,12 @@
  * Proxies return live upstream payloads only — never live.json.
  */
 import {
+  appendYahooCrumb,
   isNativeApp,
   looksLikeYahooCrumbFailure,
   nativeGetText,
+  peekYahooCrumb,
   resetYahooCrumb,
-  withYahooCrumb,
 } from "@/lib/nativeHttp";
 
 export type TransportPriority = "critical" | "normal" | "low";
@@ -78,14 +79,13 @@ function markFailure(kind: ProxyKind) {
   const n = (failCounts.get(kind) || 0) + 1;
   failCounts.set(kind, n);
   // Soft circuit — don't exile the main paths for long.
-  // `native-direct` is the iOS happy path and a transient upstream blip must not
-  // banish it in favour of the (much worse) public proxies, so it cools fastest.
+  // A *failing* native path must get out of the ladder's way quickly: it runs
+  // first, so every poll pays its budget before reaching a proxy that might
+  // actually work. Two strikes and it stands aside for 20s while the proxies
+  // carry the board; a healthy native path never trips this.
   let threshold = 2;
   let coolMs = 20_000;
-  if (isNativeKind(kind)) {
-    threshold = 3;
-    coolMs = 5_000;
-  } else if (kind === "allorigins-get" || kind === "owned") {
+  if (kind === "allorigins-get" || kind === "owned") {
     threshold = 3;
     coolMs = 8_000;
   }
@@ -303,9 +303,14 @@ async function runAttempt(attempt: ProxyAttempt, budget: number): Promise<string
     return nativeGetText(attempt.url, budget);
   }
   if (attempt.kind === "native-crumb") {
-    const url = await withYahooCrumb(attempt.url);
+    // Non-blocking: if no crumb is ready yet, fail this attempt instantly and let
+    // the ladder move on — establishment runs in the background and the next poll
+    // (3s away) finds it ready. Awaiting it here would stack a three-round-trip
+    // handshake inside an attempt budget.
+    const crumb = peekYahooCrumb();
+    if (!crumb) throw new Error("crumb not ready");
     try {
-      return await nativeGetText(url, budget);
+      return await nativeGetText(appendYahooCrumb(attempt.url, crumb), budget);
     } catch (e) {
       // A crumb that stopped working must not be reused for the next 3s poll.
       if (looksLikeYahooCrumbFailure(e)) resetYahooCrumb();
@@ -331,10 +336,12 @@ async function fetchTextUnqueued(targetUrl: string, timeoutMs: number): Promise<
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     // allorigins/get often needs >10s; don't abort early on the preferred path.
-    // Native is a direct call to the origin — it should be fast, and giving it the
-    // full budget would delay the proxy fallback when a host rejects direct calls.
+    // Native is a direct call to the origin — healthy it answers in well under a
+    // second, and it runs FIRST, so its budget is paid by every poll before any
+    // proxy gets a turn. 6s is generous for a direct call and keeps the whole
+    // ladder (native → crumb → allorigins) inside the poll watchdog.
     const budget = isNativeKind(attempt.kind)
-      ? Math.min(timeoutMs, 12_000)
+      ? Math.min(timeoutMs, 6_000)
       : attempt.kind === "allorigins-get" || attempt.kind === "owned"
         ? timeoutMs
         : Math.min(timeoutMs, i === 0 ? timeoutMs : Math.max(3500, Math.floor(timeoutMs * 0.5)));

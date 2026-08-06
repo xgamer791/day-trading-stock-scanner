@@ -99,6 +99,30 @@ async function loadHttpPlugin(): Promise<CapacitorHttpPlugin | null> {
   return httpPluginPromise;
 }
 
+/**
+ * Absolute ceiling on any native call.
+ *
+ * `connectTimeout` / `readTimeout` are passed to URLSession, but a transport must
+ * not depend on the callee honouring its own timeout: a native request that never
+ * settles would leave the poll permanently in-flight — no data, no error, a
+ * RECONNECTING badge forever. This race guarantees every native promise settles.
+ */
+function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} hard-timeout ${ms}ms`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 function toText(data: unknown): string {
   if (typeof data === "string") return data;
   if (data == null) return "";
@@ -126,7 +150,8 @@ export async function nativeGetText(
   const http = await loadHttpPlugin();
   if (!http) throw new Error("native: CapacitorHttp unavailable");
 
-  const res = await http.request({
+  const res = await withHardTimeout(
+    http.request({
     url,
     method: "GET",
     responseType: "text",
@@ -142,7 +167,10 @@ export async function nativeGetText(
       Pragma: "no-cache",
       ...headers,
     },
-  });
+    }),
+    timeoutMs + 2_000,
+    "native",
+  );
 
   if (typeof res.status === "number" && (res.status < 200 || res.status >= 300)) {
     throw new Error(`native ${res.status}`);
@@ -176,6 +204,7 @@ export async function nativeGetJson(url: string, timeoutMs = 12_000): Promise<un
  * ------------------------------------------------------------------ */
 
 let crumbPromise: Promise<string | null> | null = null;
+let crumbValue: string | null = null;
 
 export function looksLikeYahooCrumbFailure(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err ?? "");
@@ -188,20 +217,22 @@ async function establishYahooCrumb(): Promise<string | null> {
   try {
     // Seed cookies — the response bodies are irrelevant, the Set-Cookie headers are not.
     for (const seed of ["https://fc.yahoo.com/", "https://finance.yahoo.com/"]) {
-      await http
-        .request({
+      await withHardTimeout(
+        http.request({
           url: seed,
           method: "GET",
           responseType: "text",
-          connectTimeout: 8_000,
-          readTimeout: 8_000,
+          connectTimeout: 5_000,
+          readTimeout: 5_000,
           headers: { "User-Agent": NATIVE_USER_AGENT, Accept: "text/html,*/*" },
-        })
-        .catch(() => null);
+        }),
+        6_000,
+        "crumb-seed",
+      ).catch(() => null);
     }
     const crumb = await nativeGetText(
       "https://query2.finance.yahoo.com/v1/test/getcrumb",
-      8_000,
+      6_000,
     );
     const trimmed = crumb.trim();
     return trimmed && trimmed.length < 64 ? trimmed : null;
@@ -212,20 +243,43 @@ async function establishYahooCrumb(): Promise<string | null> {
 
 /** Cached Yahoo crumb, established on first need. Reset with `resetYahooCrumb()`. */
 export function getYahooCrumb(): Promise<string | null> {
-  if (!crumbPromise) crumbPromise = establishYahooCrumb();
+  if (!crumbPromise) {
+    crumbPromise = establishYahooCrumb().then((c) => {
+      crumbValue = c;
+      return c;
+    });
+  }
   return crumbPromise;
+}
+
+/**
+ * Non-blocking crumb lookup for the transport ladder.
+ *
+ * Establishing a crumb costs three round-trips; awaiting that inside a ladder
+ * attempt would let one slow Yahoo handshake eat the whole poll budget. Instead:
+ * return the crumb if one is ready, and otherwise kick establishment off in the
+ * background and fail this attempt fast — the *next* poll (3s later) finds it ready.
+ */
+export function peekYahooCrumb(): string | null {
+  if (!crumbPromise) void getYahooCrumb();
+  return crumbValue;
 }
 
 /** Drop a crumb that stopped working so the next failure re-establishes one. */
 export function resetYahooCrumb(): void {
   crumbPromise = null;
+  crumbValue = null;
 }
 
-/** Append `&crumb=…` to a Yahoo URL, if we managed to get one. */
+/** Append `&crumb=…` to a Yahoo URL. */
+export function appendYahooCrumb(url: string, crumb: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}crumb=${encodeURIComponent(crumb)}`;
+}
+
+/** Await-based variant for the diagnostics screen, which *wants* to wait. */
 export async function withYahooCrumb(url: string): Promise<string> {
   if (!/\.yahoo\.com/i.test(url)) return url;
   const crumb = await getYahooCrumb();
-  if (!crumb) return url;
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}crumb=${encodeURIComponent(crumb)}`;
+  return crumb ? appendYahooCrumb(url, crumb) : url;
 }

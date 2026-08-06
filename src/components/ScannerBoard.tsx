@@ -104,6 +104,8 @@ export function ScannerBoard() {
   /** Set while the app is backgrounded — the poll must not paint into a hidden app. */
   const pausedRef = useRef(false);
   const tickRef = useRef<() => Promise<void>>(async () => {});
+  /** After a watchdog trip, skip ticks briefly so dead transports aren't hammered. */
+  const watchdogCooldownUntil = useRef(0);
 
   /* ------------------------- load persisted prefs ------------------------- */
 
@@ -145,10 +147,33 @@ export function ScannerBoard() {
       const visible =
         typeof document === "undefined" || document.visibilityState === "visible";
       if (pausedRef.current && !visible) return;
+      if (Date.now() < watchdogCooldownUntil.current) return;
       inFlight.current = true;
+      /*
+       * Poll watchdog. A tick must either paint fresh data or surface an error —
+       * within this many ms, unconditionally. Without it, any transport that
+       * neither resolves nor rejects leaves `inFlight` held forever: no rows, no
+       * error strip, a RECONNECTING badge until the app is killed. That failure
+       * mode is now structurally impossible.
+       *
+       * A payload that arrives after the watchdog fired is DROPPED, never painted
+       * — by then it is stale by definition (ZERO CACHING: empty > stale). Its
+       * transport success still updates the sticky preference, so late completions
+       * teach the ladder which path works even though their data is discarded.
+       */
+      const WATCHDOG_MS = 30_000;
+      let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         // LIVE ONLY — never live.json / snapshot (STOCK_SCANNER_APP_MEMORY.md)
-        const live = await fetchLiveScannerClient({ boards: boardsRef.current });
+        const live = await Promise.race([
+          fetchLiveScannerClient({ boards: boardsRef.current }),
+          new Promise<never>((_, reject) => {
+            watchdogTimer = setTimeout(
+              () => reject(new Error("__watchdog__")),
+              WATCHDOG_MS,
+            );
+          }),
+        ]);
         if (cancelled || pausedRef.current) return;
 
         if (
@@ -170,15 +195,23 @@ export function ScannerBoard() {
         if (cancelled) return;
         setConnected(false);
         const raw = err instanceof Error ? err.message : "Failed to load live data";
-        // Safari often surfaces opaque TypeError "Load failed" for proxy/CORS failures.
-        const msg =
-          /load failed|failed to fetch|networkerror|aborted/i.test(raw)
-            ? "Live feed reconnecting (quote transport)…"
-            : raw;
+        let msg: string;
+        if (raw === "__watchdog__") {
+          // Every transport is slow or hanging — back off briefly and say exactly
+          // where the user can see which one.
+          watchdogCooldownUntil.current = Date.now() + 12_000;
+          msg = "Live feed timed out (30s) — open Menu ▸ Connection to see which transport is failing";
+        } else if (/load failed|failed to fetch|networkerror|aborted/i.test(raw)) {
+          // Safari often surfaces opaque TypeError "Load failed" for proxy/CORS failures.
+          msg = "Live feed reconnecting (quote transport)… Menu ▸ Connection shows details";
+        } else {
+          msg = raw;
+        }
         setError(msg);
         // STOCK_SCANNER_APP_MEMORY: on failure show RECONNECTING/error — do NOT paint stale last-tick rows.
         setData(null);
       } finally {
+        clearTimeout(watchdogTimer);
         inFlight.current = false;
       }
     };

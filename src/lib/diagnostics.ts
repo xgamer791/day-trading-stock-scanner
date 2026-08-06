@@ -67,6 +67,13 @@ export async function runDiagnostics(): Promise<ProbeResult[]> {
   const native = isNativeApp();
 
   out.push({
+    label: "Build",
+    status: "info",
+    ms: 0,
+    detail: process.env.NEXT_PUBLIC_BUILD_STAMP || "unknown",
+  });
+
+  out.push({
     label: "Platform",
     status: "info",
     ms: 0,

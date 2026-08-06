@@ -229,6 +229,26 @@ after that session ends, and clear only at the **next 04:00 ET premarket open**.
   proof of life**. A green "LIVE" over a deliberately frozen board is indistinguishable
   from a hung poll — keep them separate.
 
+### Poll watchdog — liveness, not caching (added 2026-08-06)
+
+A quote tick must either paint fresh data or surface an on-screen error within **30s**,
+unconditionally (`ScannerBoard.tsx`). Before this, a transport that neither resolved nor
+rejected held `inFlight` forever: no rows, no error strip, a RECONNECTING badge until the
+app was killed — indistinguishable from the initial state. Rules:
+
+- A payload arriving **after** the watchdog fired is **dropped, never painted** — it is
+  stale by definition (empty > stale). Its transport success may still update the sticky
+  preference so the ladder learns which path works.
+- After a trip, ticks back off ~12s so dead transports aren't hammered every 3s.
+- Every native `CapacitorHttp` call is additionally hard-raced (`withHardTimeout`,
+  `nativeHttp.ts`) — never trust a callee to honour its own timeout.
+- The `native-crumb` ladder attempt is **non-blocking** (`peekYahooCrumb`): if no crumb is
+  ready it fails instantly and establishment runs in the background for the next poll.
+  Do not "fix" it into an await — that stacks a 3-round-trip handshake inside a 3s poll.
+- Menu ▸ Connection is the on-device transport report (one-shot, user-triggered, never
+  feeds the board). The drawer footer shows the build stamp — check it before debugging
+  a "stale build" mystery.
+
 ### Verifying the iOS build
 
 `npm run verify:native` is the gate — it proves direct no-proxy reachability, same-payload
