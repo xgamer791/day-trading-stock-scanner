@@ -6,22 +6,19 @@ on:
   workflow_dispatch:
   schedule:
     # Snapshot refresh only (live feed is browser-polled, not live.json).
-    # Keep infrequent so deploy-pages is not starved by a permanent queue.
     - cron: "0 * * * 1-5"
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
-# cancel-in-progress:false — minute cron + cancel was leaving deploy-pages
-# stuck in deployment_queued until timeout (gear removal never reached live).
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +29,7 @@ jobs:
       - run: npm ci
       - name: Fetch live Yahoo market data
         run: npm run fetch:live
+        continue-on-error: true
       - run: npm run build
         env:
           GITHUB_PAGES: "true"
@@ -39,16 +37,12 @@ jobs:
           NEXT_PUBLIC_QUOTE_PROXY_URL: ${{ secrets.QUOTE_PROXY_URL }}
       - name: Ensure .nojekyll
         run: touch out/.nojekyll
-      - uses: actions/upload-pages-artifact@v3
+      # deploy-pages was stuck in deployment_queued (10m timeouts).
+      # Publish the static export straight to the gh-pages branch instead.
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: out
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./out
+          force_orphan: true
+          enable_jekyll: false
