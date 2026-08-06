@@ -675,10 +675,38 @@ function premarketQuoteFromChart(symbol: string, payload: unknown): LiveQuote | 
   };
 }
 
-const PM_CHART_MAX = 64;
-const PM_CHART_CONCURRENCY = 6;
-const PM_CHART_BUDGET_MS = 14_000;
-const PM_UNIVERSE_SLICE = 48;
+const PM_CHART_MAX = 36;
+const PM_CHART_CONCURRENCY = 4;
+const PM_CHART_BUDGET_MS = 16_000;
+const PM_UNIVERSE_SLICE = 24;
+
+/** Premarket row from Yahoo screener when preMarketPrice is stamped (same-payload %). */
+function premarketQuoteFromScreener(q: Record<string, unknown>): LiveQuote | null {
+  const symbol = String(q.symbol || "")
+    .replace("/", "-")
+    .toUpperCase();
+  const name = String(q.shortName || q.longName || symbol);
+  if (!symbol || isJunk(symbol, name)) return null;
+  const pre = Number(q.preMarketPrice) || 0;
+  const prevClose = Number(q.regularMarketPreviousClose) || 0;
+  if (!(pre > 0) || !(prevClose > 0)) return null;
+  const changePct = ((pre - prevClose) / prevClose) * 100;
+  if (!(changePct > 0)) return null;
+  const dayHigh = Math.max(Number(q.regularMarketDayHigh) || 0, pre);
+  const dayLow = Number(q.regularMarketDayLow) || Math.min(prevClose, pre);
+  const volume = Number(q.preMarketVolume) || Number(q.regularMarketVolume) || 0;
+  return {
+    symbol,
+    name,
+    last: pre,
+    prevClose,
+    dayHigh,
+    dayLow,
+    volume,
+    changePct,
+    floatMillions: liveFloatMillions(q),
+  };
+}
 
 /**
  * Live Premarket board — Realtime gap parity.
@@ -694,16 +722,33 @@ async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
     loadUniverseSymbols(),
     loadAhDiscoverySymbols(),
     Promise.allSettled([
-      fetchYahooScreenerRaw("most_actives", 100, 14000, "normal"),
+      fetchYahooScreenerRaw("most_actives", 100, 14000, "critical"),
       fetchYahooScreenerRaw("small_cap_gainers", 100, 14000, "normal"),
       fetchYahooScreenerRaw("aggressive_small_caps", 100, 14000, "normal"),
+      fetchYahooScreenerRaw("day_gainers", 50, 14000, "normal"),
     ]),
   ]);
+
+  const map = new Map<string, LiveQuote>();
+
+  // Screener rows with a real preMarketPrice only — never regularMarketPrice
+  // (that reintroduces yesterday's day_gainers board).
+  for (const res of screenerSeeds) {
+    if (res.status !== "fulfilled") continue;
+    for (const q of res.value) {
+      const row = premarketQuoteFromScreener(q);
+      if (!row) continue;
+      if (!map.has(row.symbol) || row.changePct > (map.get(row.symbol)?.changePct || 0)) {
+        map.set(row.symbol, row);
+      }
+      if (row.changePct >= 1) pmHotSymbols.add(row.symbol);
+    }
+  }
 
   const needChart = new Set<string>();
   for (const s of [...discoverySeeds, ...nasdaqSeeds, ...pmHotSymbols]) {
     const sym = s.toUpperCase();
-    if (sym && !isJunk(sym)) needChart.add(sym);
+    if (sym && !isJunk(sym) && !map.has(sym)) needChart.add(sym);
   }
   for (const res of screenerSeeds) {
     if (res.status !== "fulfilled") continue;
@@ -712,31 +757,32 @@ async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
         .replace("/", "-")
         .toUpperCase();
       if (!s || isJunk(s, String(q.shortName || q.longName || ""))) continue;
-      needChart.add(s);
+      // Still chart names without a usable preMarketPrice stamp.
+      if (!map.has(s)) needChart.add(s);
     }
   }
 
   const firstWave = pmHotSymbols.size < 8;
-  const chartMax = firstWave ? 80 : PM_CHART_MAX;
+  const chartMax = firstWave ? 48 : PM_CHART_MAX;
 
   if (universe.length) {
+    const slice = Math.min(firstWave ? chartMax : PM_UNIVERSE_SLICE, universe.length);
     if (firstWave) {
-      const step = Math.max(1, Math.floor(universe.length / chartMax));
-      for (let i = 0; i < chartMax; i++) {
+      const step = Math.max(1, Math.floor(universe.length / slice));
+      for (let i = 0; i < slice; i++) {
         const sym = universe[(i * step) % universe.length];
-        if (sym && !isJunk(sym)) needChart.add(sym);
+        if (sym && !isJunk(sym) && !map.has(sym)) needChart.add(sym);
       }
     } else {
-      const slice = Math.min(PM_UNIVERSE_SLICE, universe.length);
       for (let i = 0; i < slice; i++) {
         const sym = universe[(pmUniverseCursor + i) % universe.length];
-        if (sym && !isJunk(sym)) needChart.add(sym);
+        if (sym && !isJunk(sym) && !map.has(sym)) needChart.add(sym);
       }
       pmUniverseCursor = (pmUniverseCursor + slice) % universe.length;
     }
   }
 
-  // Prioritize discovery / sticky ahead of the rotating universe tail.
+  // Prioritize discovery / sticky — Realtime micros live here (CLRO/PAVS/…).
   const prioritized = [
     ...discoverySeeds,
     ...pmHotSymbols,
@@ -744,25 +790,29 @@ async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
     ...needChart,
   ]
     .map((s) => String(s).toUpperCase())
-    .filter((s) => s && !isJunk(s));
+    .filter((s) => s && !isJunk(s) && !map.has(s));
   const chartList = [...new Set(prioritized)].slice(0, chartMax);
 
-  const map = new Map<string, LiveQuote>();
-  if (!chartList.length) return map;
-
-  const deadline = Date.now() + PM_CHART_BUDGET_MS;
-  const chartRows = await mapPool(chartList, PM_CHART_CONCURRENCY, deadline, async (symbol) => {
-    const payload = await fetchAhTransport(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`,
-      9000,
-    );
-    return premarketQuoteFromChart(symbol, payload);
-  });
-  for (const row of chartRows) {
-    if (!map.has(row.symbol) || row.changePct > (map.get(row.symbol)?.changePct || 0)) {
-      map.set(row.symbol, row);
+  if (chartList.length) {
+    const deadline = Date.now() + PM_CHART_BUDGET_MS;
+    const chartRows = await mapPool(chartList, PM_CHART_CONCURRENCY, deadline, async (symbol) => {
+      // Premarket is the active board — use critical queued transport (not only
+      // unqueued AH path) so Safari/public proxies actually deliver charts.
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`;
+      let payload: unknown;
+      try {
+        payload = await fetchViaProxy(url, 12000, "critical");
+      } catch {
+        payload = await fetchAhTransport(url, 9000);
+      }
+      return premarketQuoteFromChart(symbol, payload);
+    });
+    for (const row of chartRows) {
+      if (!map.has(row.symbol) || row.changePct > (map.get(row.symbol)?.changePct || 0)) {
+        map.set(row.symbol, row);
+      }
+      if (row.changePct >= 1) pmHotSymbols.add(row.symbol);
     }
-    if (row.changePct >= 1) pmHotSymbols.add(row.symbol);
   }
 
   if (pmHotSymbols.size > 120) {
