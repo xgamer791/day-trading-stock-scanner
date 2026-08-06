@@ -103,6 +103,18 @@ This is a **browser CORS / poll-identity** bug, not bad % math on a successful f
 
 Node/direct Yahoo (no CORS) stays stable (CLRO every poll) — that is why VM checks can look “fine” while Safari still cycles.
 
+### Verification evidence (2026-08-06 — confirmed before fix)
+
+**Live Pages (browser):** ~130s watch — `Scanning…` → ERROR banner (`Live premarket quotes unavailable`) → WRONG/WEAK top (CLOV/VIR/…) → CORRECT (CLRO/CELZ/PAVS/SURG). Cycle observed.
+
+**Lab:**
+- Full discovery charts (Node direct) → CLRO #1 board.
+- Same quotes with discovery micros stripped → different weaker identity (AEVA/MGRX/SMJF-class) — proves partial poll ≠ correct board.
+- `allorigins/get` chart probes: **8/12 fail** (batched), parallel storm **23/24 fail** — public proxy cannot sustain Premarket fan-out.
+- Product code path for empty → throw → `setData(null)` confirmed in `liveClient.ts` / `ScannerBoard.tsx`.
+
+Diagnosis is verified. Implement fix only after this section; then re-verify live Safari ≥60s stable.
+
 ### Why Flt is often blank on the correct Premarket paint
 
 Flt uses extra Nasdaq `/summary` calls (`fetchLiveMarketCaps`) after charts. Same proxy pool; when charts barely succeed, Flt is starved → `—`. Soft-fail is OK per symbol; a systematically empty Flt column on top Premarket rows is still a VERIFY failure.
