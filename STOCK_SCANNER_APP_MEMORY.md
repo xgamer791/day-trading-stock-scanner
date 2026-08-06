@@ -102,7 +102,9 @@ This is non-negotiable. Violating it is a failed change.
 6. After Hours: **always fetch during the afterhours window** so the hold is written even if the AH tab was never opened; overnight closed may fetch only when the AH tab is visible.
 7. During afterhours/closed: soft-empty Gainers when Yahoo/Polygon miss (do not throw before AH can seed).
 
-**Do not reintroduce:** session-narrow `hasHold`, closed-only Gainers hold subtitle, AH fetch only when tab selected during the live AH window, or throwing away the whole poll on Gainers miss after 16:00.
+### Premarket after 9:30 — live rebuild (not hold-only) — 2026-08-06
+
+sessionStorage hold alone failed users who refreshed (SSR left holds empty). After 9:30 we now **rebuild Premarket from live Yahoo `preMarketPrice` stamps** on day_gainers + soft most_actives/small_cap screeners (`charts: false` — no chart storm). Still **never** regular-session % / Most Advanced as Premarket. Soft-fail keeps a strong hold if rebuild misses. Same quality-gate writes the hold for the rest of the day.
 
 ---
 

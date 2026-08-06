@@ -717,16 +717,34 @@ function premarketQuoteFromScreener(q: Record<string, unknown>): LiveQuote | nul
  * Fan-out is deliberately small: public CORS proxies cannot sustain 36–80
  * chart calls per 3s poll (that caused correct→error→wrong cycling). Quote
  * ah-discovery + sticky hot names first; only a tiny universe slice after.
+ *
+ * `charts: false` — outside 4:00–9:30 ET, rebuild from Yahoo `preMarketPrice`
+ * stamps on screeners only (no chart storm). Those fields stay on the live
+ * payload through RTH/AH, so Premarket can repaint after refresh without
+ * sessionStorage and without using regular-session %.
  */
-async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
+async function fetchPremarketGainerQuotes(
+  opts: { charts?: boolean } = {},
+): Promise<Map<string, LiveQuote>> {
+  const charts = opts.charts !== false;
+
   const [nasdaqSeeds, universe, discoverySeeds, screenerSeeds] = await Promise.all([
-    fetchNasdaqDiscoverySymbols(),
-    loadUniverseSymbols(),
-    loadAhDiscoverySymbols(),
-    Promise.allSettled([
-      fetchYahooScreenerRaw("most_actives", 50, 12000, "critical"),
-      fetchYahooScreenerRaw("small_cap_gainers", 50, 12000, "normal"),
-    ]),
+    charts ? fetchNasdaqDiscoverySymbols() : Promise.resolve([] as string[]),
+    charts ? loadUniverseSymbols() : Promise.resolve([] as string[]),
+    charts ? loadAhDiscoverySymbols() : Promise.resolve([] as string[]),
+    Promise.allSettled(
+      charts
+        ? [
+            fetchYahooScreenerRaw("most_actives", 50, 12000, "critical"),
+            fetchYahooScreenerRaw("small_cap_gainers", 50, 12000, "normal"),
+          ]
+        : [
+            // Hold-rebuild outside 4:00–9:30: screeners only, no day_gainers
+            // duplicate (caller already merged dayGainerRaw preMarket stamps).
+            fetchYahooScreenerRaw("most_actives", 50, 10000, "normal"),
+            fetchYahooScreenerRaw("small_cap_gainers", 50, 10000, "low"),
+          ],
+    ),
   ]);
 
   const map = new Map<string, LiveQuote>();
@@ -743,6 +761,8 @@ async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
       if (row.changePct >= 1) pmHotSymbols.add(row.symbol);
     }
   }
+
+  if (!charts) return map;
 
   // Chart list: discovery + sticky first. Skip huge screener/universe storms.
   const prioritized: string[] = [];
@@ -1279,6 +1299,48 @@ export async function fetchLiveScannerClient(
     throw new Error(`Live quotes unavailable (${movers.length})`);
   }
 
+  // Premarket outside 4:00–9:30: rebuild from live Yahoo preMarketPrice stamps
+  // (still on the quote payload through RTH/AH). NEVER regular-session %.
+  // Soft-fail — hold/UI keep the last strong board if this miss.
+  let premarketMovers: StockMover[] = [];
+  try {
+    const pmMap = new Map<string, LiveQuote>();
+    for (const q of dayGainerRaw) {
+      const row = premarketQuoteFromScreener(q);
+      if (!row) continue;
+      pmMap.set(row.symbol, row);
+    }
+    // day_gainers alone often under-covers pure gap names — soft screener fill
+    // (no chart storm; charts:false uses preMarketPrice stamps only).
+    if (pmMap.size < 15) {
+      try {
+        const extra = await fetchPremarketGainerQuotes({ charts: false });
+        for (const [sym, row] of extra) {
+          if (!pmMap.has(sym) || row.changePct > (pmMap.get(sym)?.changePct || 0)) {
+            pmMap.set(sym, row);
+          }
+        }
+      } catch {
+        /* keep day_gainers-derived gaps */
+      }
+    }
+    premarketMovers = rankMovers(pmMap.values());
+    const pmNeed = premarketMovers
+      .filter((m) => m.floatMillions == null)
+      .map((m) => m.symbol)
+      .slice(0, 12);
+    if (pmNeed.length) {
+      try {
+        const marketCaps = await fetchLiveMarketCaps(pmNeed);
+        premarketMovers = applyLiveFloatFromMcap(premarketMovers, marketCaps);
+      } catch {
+        /* leave blank */
+      }
+    }
+  } catch {
+    premarketMovers = [];
+  }
+
   // News is polled separately in ScannerBoard (live, soft-fail) so the 3s
   // gainers path does not burn proxies on multi-query news fetches.
 
@@ -1288,8 +1350,8 @@ export async function fetchLiveScannerClient(
     source: sourceLabel,
     feedLimit: FEED_LIMIT,
     news,
-    // Premarket is built on the early-return path above during 4:00–9:30 ET.
-    premarket: [],
+    // Live preMarketPrice rebuild after 9:30 (not day_gainers regular %).
+    premarket: premarketMovers,
     // Gainers: regular live; afterhours/closed may be empty (UI holds last board).
     gainers: movers,
     // After Hours also clears at premarket — do not carry overnight AH into 4:00 AM.
