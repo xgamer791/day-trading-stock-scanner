@@ -142,13 +142,19 @@ export function ScannerBoard() {
         // Capture boards for hold-until-next-premarket — never let a weak
         // day_gainers-only poll overwrite a strong Most-Advanced-enriched hold
         // (that is what caused the ~20s correct↔incorrect Gainers rotation).
-        // During premarket: only the live Premarket board may be held.
+        // During premarket: always accept the live gap board (do not let
+        // yesterday's YXT-class hold quality-gate today's CLRO-class gaps).
         if (payload.premarket.length) {
-          setHeldPremarket((prev) => {
-            if (!shouldReplaceHeldBoard(payload.premarket, prev)) return prev;
+          if (nowSession === "premarket") {
             writeHeldBoard("premarket", payload.premarket);
-            return payload.premarket;
-          });
+            setHeldPremarket(payload.premarket);
+          } else {
+            setHeldPremarket((prev) => {
+              if (!shouldReplaceHeldBoard(payload.premarket, prev)) return prev;
+              writeHeldBoard("premarket", payload.premarket);
+              return payload.premarket;
+            });
+          }
         }
         if (nowSession !== "premarket") {
           if (payload.gainers.length) {

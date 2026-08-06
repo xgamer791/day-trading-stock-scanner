@@ -11,12 +11,16 @@
  *     + small unqueued chart fill for names spark still missed (regular last/prev)
  *  5) Live Flt for ranked spark/Polygon rows via small Nasdaq quote summary
  *  6) Rank by same-quote % — top 50
- *  7) After Hours (16:00–20:00 ET + overnight closed): post/extended last vs
+ *  7) Premarket (4:00–9:30 ET): live gaps via Yahoo includePrePost charts
+ *     (extended last vs previousClose). Discovery via ah-discovery.json symbols
+ *     + Nasdaq movers + universe slice. NEVER rank Yahoo day_gainers /
+ *     yesterday's regular Most Advanced as the Premarket board.
+ *  8) After Hours (16:00–20:00 ET + overnight closed): post/extended last vs
  *     regular close. Wide discovery via ah-discovery.json (symbols only) +
  *     Nasdaq movers + Yahoo includePrePost charts — not day_gainers ranking.
  *     Gated behind the AH tab; soft-fail so Gainers never breaks.
  *
- * If BOTH Yahoo day_gainers and Polygon fail: throw / RECONNECTING.
+ * If BOTH Yahoo day_gainers and Polygon fail (regular/AH): throw / RECONNECTING.
  * Do NOT substitute Nasdaq Most Advanced alone as “top gainers”.
  *
  * FORBIDDEN: live.json, floats.json, last-tick-as-LIVE, localStorage, etc.
@@ -387,9 +391,14 @@ async function mapPool<T, R>(
 
 /** Sticky AH discovery symbols only — never prices (STOCK_SCANNER_APP_MEMORY allowed). */
 const ahHotSymbols = new Set<string>();
+/** Sticky Premarket discovery symbols only — never prices. */
+const pmHotSymbols = new Set<string>();
 let universeSymbols: string[] | null = null;
 let universeCursor = 0;
+let pmUniverseCursor = 0;
 let ahDiscoverySymbols: string[] | null = null;
+/** ET calendar day we last wiped extended-hours sticky sets (once per premarket day). */
+let extendedHotClearedDay: string | null = null;
 
 async function loadUniverseSymbols(): Promise<string[]> {
   if (universeSymbols) return universeSymbols;
@@ -605,6 +614,165 @@ async function fetchAfterHoursGainerQuotes(
       .map((r) => r.symbol);
     ahHotSymbols.clear();
     for (const s of ranked) ahHotSymbols.add(s);
+  }
+
+  return map;
+}
+
+/**
+ * Premarket quote from Yahoo chart includePrePost.
+ * % = (extended last − previousClose) / previousClose — NOT regularMarketPrice
+ * (that field is still yesterday's regular close during PRE and paints day_gainers).
+ */
+function premarketQuoteFromChart(symbol: string, payload: unknown): LiveQuote | null {
+  const result = (payload as {
+    chart?: {
+      result?: Array<{
+        meta?: Record<string, unknown>;
+        indicators?: {
+          quote?: Array<{ close?: Array<number | null>; volume?: Array<number | null> }>;
+        };
+      }>;
+    };
+  })?.chart?.result?.[0];
+  if (!result) return null;
+  const meta = result.meta || {};
+  const closes = result.indicators?.quote?.[0]?.close || [];
+  const volumes = result.indicators?.quote?.[0]?.volume || [];
+  let last = 0;
+  let volSum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    const c = Number(closes[i]);
+    const v = Number(volumes[i]);
+    if (Number.isFinite(v) && v > 0) volSum += v;
+    if (Number.isFinite(c) && c > 0) last = c;
+  }
+  const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
+  const preMeta = Number(meta.preMarketPrice) || 0;
+  // Prefer last includePrePost bar; fall back to stamped preMarketPrice.
+  const price = last > 0 ? last : preMeta;
+  if (!(price > 0) || !(prevClose > 0)) return null;
+  const changePct = ((price - prevClose) / prevClose) * 100;
+  if (!(changePct > 0)) return null;
+
+  const dayHigh = Math.max(Number(meta.regularMarketDayHigh) || 0, price);
+  const dayLow = Number(meta.regularMarketDayLow) || Math.min(prevClose, price);
+  const volume =
+    Number(meta.preMarketVolume) || volSum || Number(meta.regularMarketVolume) || 0;
+  const name = String(meta.shortName || meta.longName || symbol);
+  if (isJunk(symbol, name)) return null;
+
+  return {
+    symbol,
+    name,
+    last: price,
+    prevClose,
+    dayHigh,
+    dayLow,
+    volume,
+    changePct,
+    floatMillions: null,
+  };
+}
+
+const PM_CHART_MAX = 64;
+const PM_CHART_CONCURRENCY = 6;
+const PM_CHART_BUDGET_MS = 14_000;
+const PM_UNIVERSE_SLICE = 48;
+
+/**
+ * Live Premarket board — Realtime gap parity.
+ *
+ * NEVER rank Yahoo day_gainers / Nasdaq Most Advanced regular-session % here:
+ * those are yesterday's board (YXT-class) and stay elevated overnight.
+ * Discover symbols (ah-discovery + Nasdaq movers + sticky + universe), then
+ * quote each via includePrePost chart last vs previousClose.
+ */
+async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
+  const [nasdaqSeeds, universe, discoverySeeds, screenerSeeds] = await Promise.all([
+    fetchNasdaqDiscoverySymbols(),
+    loadUniverseSymbols(),
+    loadAhDiscoverySymbols(),
+    Promise.allSettled([
+      fetchYahooScreenerRaw("most_actives", 100, 14000, "normal"),
+      fetchYahooScreenerRaw("small_cap_gainers", 100, 14000, "normal"),
+      fetchYahooScreenerRaw("aggressive_small_caps", 100, 14000, "normal"),
+    ]),
+  ]);
+
+  const needChart = new Set<string>();
+  for (const s of [...discoverySeeds, ...nasdaqSeeds, ...pmHotSymbols]) {
+    const sym = s.toUpperCase();
+    if (sym && !isJunk(sym)) needChart.add(sym);
+  }
+  for (const res of screenerSeeds) {
+    if (res.status !== "fulfilled") continue;
+    for (const q of res.value) {
+      const s = String(q.symbol || "")
+        .replace("/", "-")
+        .toUpperCase();
+      if (!s || isJunk(s, String(q.shortName || q.longName || ""))) continue;
+      needChart.add(s);
+    }
+  }
+
+  const firstWave = pmHotSymbols.size < 8;
+  const chartMax = firstWave ? 80 : PM_CHART_MAX;
+
+  if (universe.length) {
+    if (firstWave) {
+      const step = Math.max(1, Math.floor(universe.length / chartMax));
+      for (let i = 0; i < chartMax; i++) {
+        const sym = universe[(i * step) % universe.length];
+        if (sym && !isJunk(sym)) needChart.add(sym);
+      }
+    } else {
+      const slice = Math.min(PM_UNIVERSE_SLICE, universe.length);
+      for (let i = 0; i < slice; i++) {
+        const sym = universe[(pmUniverseCursor + i) % universe.length];
+        if (sym && !isJunk(sym)) needChart.add(sym);
+      }
+      pmUniverseCursor = (pmUniverseCursor + slice) % universe.length;
+    }
+  }
+
+  // Prioritize discovery / sticky ahead of the rotating universe tail.
+  const prioritized = [
+    ...discoverySeeds,
+    ...pmHotSymbols,
+    ...nasdaqSeeds,
+    ...needChart,
+  ]
+    .map((s) => String(s).toUpperCase())
+    .filter((s) => s && !isJunk(s));
+  const chartList = [...new Set(prioritized)].slice(0, chartMax);
+
+  const map = new Map<string, LiveQuote>();
+  if (!chartList.length) return map;
+
+  const deadline = Date.now() + PM_CHART_BUDGET_MS;
+  const chartRows = await mapPool(chartList, PM_CHART_CONCURRENCY, deadline, async (symbol) => {
+    const payload = await fetchAhTransport(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`,
+      9000,
+    );
+    return premarketQuoteFromChart(symbol, payload);
+  });
+  for (const row of chartRows) {
+    if (!map.has(row.symbol) || row.changePct > (map.get(row.symbol)?.changePct || 0)) {
+      map.set(row.symbol, row);
+    }
+    if (row.changePct >= 1) pmHotSymbols.add(row.symbol);
+  }
+
+  if (pmHotSymbols.size > 120) {
+    const ranked = [...map.values()]
+      .filter((r) => pmHotSymbols.has(r.symbol))
+      .sort((a, b) => b.changePct - a.changePct)
+      .slice(0, 80)
+      .map((r) => r.symbol);
+    pmHotSymbols.clear();
+    for (const s of ranked) pmHotSymbols.add(s);
   }
 
   return map;
@@ -884,10 +1052,56 @@ export async function fetchLiveScannerClient(
   const { includeAfterHours = true } = opts;
   const session = sessionNow();
 
-  // New trading day — drop sticky AH discovery so yesterday's runners do not
-  // seed today's After Hours board after the 4:00 AM ET clear.
+  // Once per trading morning: drop sticky extended-hours discovery so
+  // yesterday's runners do not seed today's Premarket / AH boards.
   if (session === "premarket") {
-    ahHotSymbols.clear();
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const y = parts.find((p) => p.type === "year")?.value;
+    const m = parts.find((p) => p.type === "month")?.value;
+    const d = parts.find((p) => p.type === "day")?.value;
+    const dayKey = `${y}-${m}-${d}`;
+    if (extendedHotClearedDay !== dayKey) {
+      ahHotSymbols.clear();
+      pmHotSymbols.clear();
+      extendedHotClearedDay = dayKey;
+    }
+  }
+
+  const news: NewsItem[] = [];
+
+  // ── Premarket: dedicated live-gap board (NOT day_gainers / Most Advanced) ──
+  if (session === "premarket") {
+    const pmMap = await fetchPremarketGainerQuotes();
+    let premarketMovers = rankMovers(pmMap.values());
+    if (!premarketMovers.length) {
+      throw new Error("Live premarket quotes unavailable");
+    }
+    const pmNeed = premarketMovers
+      .filter((m) => m.floatMillions == null)
+      .map((m) => m.symbol);
+    if (pmNeed.length) {
+      try {
+        const marketCaps = await fetchLiveMarketCaps(pmNeed);
+        premarketMovers = applyLiveFloatFromMcap(premarketMovers, marketCaps);
+      } catch {
+        /* leave blank */
+      }
+    }
+    return {
+      session,
+      updatedAt: new Date().toISOString(),
+      source: "full-us-realtime",
+      feedLimit: FEED_LIMIT,
+      news,
+      premarket: premarketMovers,
+      gainers: [],
+      afterhours: [],
+    };
   }
 
   let advanced: Seed[] = [];
@@ -902,7 +1116,7 @@ export async function fetchLiveScannerClient(
   // Ranked board first — do not let Most Advanced discovery occupy the proxy
   // queue ahead of Yahoo day_gainers (Safari Load failed / slow first paint).
   const [yahooRes, polyRes] = await Promise.allSettled([
-    fetchYahooDayGainerQuotes(session === "premarket"),
+    fetchYahooDayGainerQuotes(false),
     usePolygon ? fetchPolygonGainerQuotes(FEED_LIMIT) : Promise.resolve(null),
   ]);
 
@@ -955,7 +1169,7 @@ export async function fetchLiveScannerClient(
   if (missing.length) {
     // Spark only — Flt summaries wait until after rank (fewer proxy hits).
     try {
-      const spark = await fetchYahooSpark(missing, session === "premarket");
+      const spark = await fetchYahooSpark(missing, false);
       for (const [sym, q] of spark) quotes.set(sym, q);
     } catch {
       /* ranked board still valid without spark fill */
@@ -1022,13 +1236,12 @@ export async function fetchLiveScannerClient(
     }
   }
 
-  if (session !== "premarket" && session !== "closed" && movers.length < 3) {
+  if (session !== "closed" && movers.length < 3) {
     throw new Error(`Live quotes unavailable (${movers.length})`);
   }
 
   // News is polled separately in ScannerBoard (live, soft-fail) so the 3s
   // gainers path does not burn proxies on multi-query news fetches.
-  const news: NewsItem[] = [];
 
   return {
     session,
@@ -1036,14 +1249,12 @@ export async function fetchLiveScannerClient(
     source: sourceLabel,
     feedLimit: FEED_LIMIT,
     news,
-    // Premarket tab: live gaps/gainers during the premarket window only.
-    // After 9:30 ET the UI holds the last premarket board until next 4:00 AM.
-    premarket: session === "premarket" ? movers : [],
+    // Premarket is built on the early-return path above during 4:00–9:30 ET.
+    premarket: [],
     // Gainers: regular + afterhours + overnight closed (prior session) until next premarket.
-    // Cleared for the premarket window so the new day starts clean.
-    gainers: session === "premarket" ? [] : movers,
+    gainers: movers,
     // After Hours also clears at premarket — do not carry overnight AH into 4:00 AM.
-    afterhours: session === "premarket" ? [] : afterhoursMovers,
+    afterhours: afterhoursMovers,
   };
 }
 
