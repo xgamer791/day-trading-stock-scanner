@@ -72,6 +72,55 @@ This is non-negotiable. Violating it is a failed change.
 
 ---
 
+## OPEN BUG — Premarket correct → error → wrong list cycle (MAIN ISSUE — UNFIXED)
+
+**Status: OPEN.** Persistent since 2026-08-05. Do **not** mark Premarket “done” while this cycles on the live Pages app. Diagnose before coding; remove this section only after live Safari/Pages proof that the cycle is gone.
+
+### Symptom (user + screenshots)
+
+During **4:00–9:30 ET Premarket**, the tab cycles roughly every poll window:
+
+1. **Correct** live gap board (Realtime parity): CLRO / PAVS / CELZ / SURG / SOUN…
+2. **Error:** red banner `Live data error: Live premarket quotes unavailable` + empty table
+3. **Incorrect / weak board:** a different, much softer list (e.g. SMJF/MATV/CHYM-class ~+18% tops) — **not** the Realtime gap leaders
+4. Back to **correct**
+
+Flt on the correct board is often all `—` in Safari even when prices are right (secondary).
+
+### What is *not* the bug anymore
+
+- Ranking Yahoo `day_gainers` / Nasdaq Most Advanced **regular-session %** as Premarket (YXT overnight board) was fixed: Premarket has a dedicated `fetchPremarketGainerQuotes()` path (includePrePost chart last vs `previousClose`). Do not reintroduce day_gainers-as-Premarket.
+
+### Root cause (diagnosed 2026-08-06 — fix not landed yet)
+
+This is a **browser CORS / poll-identity** bug, not bad % math on a successful full poll.
+
+1. **Premarket needs many Yahoo `includePrePost` chart calls** (discovery: `ah-discovery.json` + Nasdaq + universe). On GitHub Pages those go through **public CORS proxies** (`corsTransport.ts`).
+2. **Poll A (full charts succeed):** CLRO-class board → correct.
+3. **Poll B (proxy burn / all charts fail):** `fetchPremarketGainerQuotes()` returns empty → `fetchLiveScannerClient` **throws** `Live premarket quotes unavailable` → `ScannerBoard` catch **`setData(null)`** → error banner + empty table (APP_MEMORY active-session clear).
+4. **Poll C (partial succeed):** only screener `preMarketPrice` stamps and/or a thin chart subset land → ranked board is a **different weaker identity** (incorrect list). Written straight into UI; during premarket there is **no quality-gate** against replacing a strong board with a weak one (`ScannerBoard` always accepts live premarket).
+5. **Poll D:** proxies recover → correct again.
+
+Node/direct Yahoo (no CORS) stays stable (CLRO every poll) — that is why VM checks can look “fine” while Safari still cycles.
+
+### Why Flt is often blank on the correct Premarket paint
+
+Flt uses extra Nasdaq `/summary` calls (`fetchLiveMarketCaps`) after charts. Same proxy pool; when charts barely succeed, Flt is starved → `—`. Soft-fail is OK per symbol; a systematically empty Flt column on top Premarket rows is still a VERIFY failure.
+
+### Fix direction (when implementing — do not half-fix)
+
+- **Stop throwing away a good Premarket board** when the next poll is empty/weak: during an **active premarket window**, do not paint a weaker/empty live result over a strong in-window board (distinct from forbidden mid-session last-tick-after-failure *as LIVE badge lying* — show RECONNECTING if you must, but do not flip to a different wrong identity). Prefer: keep last **strong same-session** Premarket rows on screen while transport recovers, or soft-fail empty without `setData(null)` when a quality hold exists for *this* premarket session.
+- **Reduce Premarket proxy fan-out** / prioritize `ah-discovery` + sticky `pmHotSymbols` so CLRO-class names are quoted every poll before universe noise.
+- **Quality-gate Premarket writes** the same way Gainers hold blocks weak day_gainers-only boards (strong CLRO board must not be overwritten by SMJF-class partials).
+- **Durable transport:** owned quote proxy and/or Polygon secret — public proxies alone will keep regenerating this class of bug.
+- **Never** “fix” the cycle by putting `day_gainers` regular % back into Premarket.
+
+### Verify when closed
+
+Live Pages Premarket on Safari for ≥60s: no error banner flip, top identity stays Realtime-gap-like (not oscillating to a soft alternate list), Flt numeric for most top 15.
+
+---
+
 ## Product rules
 
 - **Only ranking filter:** top % gainers (positive change). No HOD / min-price / min-volume gates for inclusion.
@@ -168,6 +217,7 @@ Rules going forward:
 - [ ] Price, volume, %Chg, and Flt come from the live poll — not cross-poll caches
 - [ ] Failed live poll does not paint snapshot/cached movers as LIVE (rows cleared)
 - [ ] Failed `day_gainers` does not paint Most Advanced / spark-only as the gainers board (Polygon live OK; Most Advanced alone not OK)
+- [ ] **OPEN BUG check:** Premarket does not cycle correct → error → wrong list on live Pages (see OPEN BUG section above) — if still open, do not claim Premarket fixed
 - [ ] **VERIFY YOUR WORK:** live Pages Gainers table shows numeric Flt for most top runners; LIVE not stuck RECONNECTING / “Load failed”
 - [ ] Deployed Pages link verified after change
 - [ ] If user asked for a second-agent visual check: use **another Grok agent**, not another provider
