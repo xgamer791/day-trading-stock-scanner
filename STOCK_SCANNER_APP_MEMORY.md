@@ -79,7 +79,7 @@ This is non-negotiable. Violating it is a failed change.
 - **Markets:** full US listed equities (NASDAQ, NYSE, AMEX/Arca, etc.).
 - **Junk filter OK:** warrants / units / rights / preferreds / leveraged ETFs (retail screener parity).
 - **Premarket tab ≠ Gainers tab ≠ After Hours tab** (session-aware).
-- **After Hours tab:** post-market % vs regular-session close during 16:00–20:00 ET (and overnight live Yahoo postMarket* while `closed`) — never paste regular `day_gainers` into this tab.
+- **After Hours tab:** post-market % vs regular-session close during 16:00–20:00 ET (and overnight while `closed`). Discovery is wider than Yahoo `day_gainers` alone: Nasdaq movers + `public/data/ah-discovery.json` (symbols only, from Actions/universe chart scan) + live Yahoo `includePrePost` quotes. Never paste regular `day_gainers` ranking into this tab; never treat `ah-discovery.json` as a priced board.
 - **Prior-session hold:** Premarket / Gainers / After Hours keep their last session board after the window ends until next **4:00 AM ET premarket**, then clear.
 - **No demo / fake fallback data.**
 - Prefer GitHub Pages deploy; auto-deploy on changes and send the Pages link.

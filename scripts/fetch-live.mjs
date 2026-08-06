@@ -490,6 +490,24 @@ async function main() {
     "Top gainers:",
     gainers.map((m) => `${m.symbol} ${m.changePct.toFixed(1)}%`).join(", ") || "(none)",
   );
+
+  // Symbols-only AH discovery for the browser (never a priced live feed).
+  // Soft-fail — must not break live.json publish.
+  if (session === "afterhours" || session === "closed") {
+    try {
+      const { spawnSync } = await import("node:child_process");
+      const r = spawnSync(process.execPath, [path.join(__dirname, "build-ah-discovery.mjs")], {
+        cwd: ROOT,
+        env: { ...process.env, AH_DISCOVERY_BUDGET_MS: "45000" },
+        encoding: "utf8",
+      });
+      if (r.stdout) process.stdout.write(r.stdout);
+      if (r.stderr) process.stderr.write(r.stderr);
+      if (r.status !== 0) console.warn("AH discovery refresh exited", r.status);
+    } catch (e) {
+      console.warn("AH discovery refresh skipped:", e instanceof Error ? e.message : e);
+    }
+  }
 }
 
 main().catch((err) => {

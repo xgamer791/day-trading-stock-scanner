@@ -10,8 +10,10 @@
  *  4) Yahoo spark for Most Advanced symbols missing from the ranked board (≤30)
  *  5) Live Flt for ranked spark/Polygon rows via small Nasdaq quote summary
  *  6) Rank by same-quote % — top 50
- *  7) After Hours (16:00–20:00 ET only): rank by post-market % vs regular close
- *     from live Yahoo screener payloads — NOT regular day_gainers %
+ *  7) After Hours (16:00–20:00 ET + overnight closed): post/extended last vs
+ *     regular close. Wide discovery via ah-discovery.json (symbols only) +
+ *     Nasdaq movers + Yahoo includePrePost charts — not day_gainers ranking.
+ *     Gated behind the AH tab; soft-fail so Gainers never breaks.
  *
  * If BOTH Yahoo day_gainers and Polygon fail: throw / RECONNECTING.
  * Do NOT substitute Nasdaq Most Advanced alone as “top gainers”.
@@ -244,8 +246,9 @@ async function fetchYahooDayGainerQuotes(): Promise<{
 }
 
 /**
- * After-hours top gainers: % from regular-session close → postMarketPrice.
- * NOT regular day_gainers ranking. Live Yahoo payloads only (STOCK_SCANNER_APP_MEMORY).
+ * After-hours top gainers: % from regular-session close → postMarket / extended
+ * last. NOT regular day_gainers ranking. Live Yahoo payloads only
+ * (STOCK_SCANNER_APP_MEMORY).
  */
 function afterHoursQuoteFromRaw(q: Record<string, unknown>): LiveQuote | null {
   const symbol = String(q.symbol || "")
@@ -279,14 +282,213 @@ function afterHoursQuoteFromRaw(q: Record<string, unknown>): LiveQuote | null {
   };
 }
 
+/** AH board only — bypass the gainers proxy queue so charts cannot starve day_gainers. */
+async function fetchAhTransport(url: string, timeoutMs = 10000): Promise<unknown> {
+  try {
+    return await fetchJsonDirect(url, Math.min(timeoutMs, 8000));
+  } catch {
+    /* browser CORS */
+  }
+  return fetchJsonViaCors(url, timeoutMs, "low", { queue: false });
+}
+
+function afterHoursQuoteFromChart(symbol: string, payload: unknown): LiveQuote | null {
+  const result = (payload as {
+    chart?: {
+      result?: Array<{
+        meta?: Record<string, unknown>;
+        indicators?: { quote?: Array<{ close?: Array<number | null> }> };
+      }>;
+    };
+  })?.chart?.result?.[0];
+  if (!result) return null;
+  const meta = result.meta || {};
+  const closes = result.indicators?.quote?.[0]?.close || [];
+  let last = 0;
+  for (let i = closes.length - 1; i >= 0; i--) {
+    const c = Number(closes[i]);
+    if (Number.isFinite(c) && c > 0) {
+      last = c;
+      break;
+    }
+  }
+  const regular = Number(meta.regularMarketPrice) || 0;
+  if (!(last > 0) || !(regular > 0)) return null;
+  const changePct = ((last - regular) / regular) * 100;
+  if (!(changePct > 0)) return null;
+
+  const dayHigh = Math.max(Number(meta.regularMarketDayHigh) || 0, last);
+  const dayLow = Number(meta.regularMarketDayLow) || Math.min(regular, last);
+  const volume = Number(meta.regularMarketVolume) || 0;
+  const name = String(meta.shortName || meta.longName || symbol);
+  if (isJunk(symbol, name)) return null;
+
+  return {
+    symbol,
+    name,
+    last,
+    prevClose: regular,
+    dayHigh,
+    dayLow,
+    volume,
+    changePct,
+    floatMillions: null,
+  };
+}
+
+async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  deadlineMs: number,
+  fn: (item: T) => Promise<R | null>,
+): Promise<R[]> {
+  const out: R[] = [];
+  let idx = 0;
+  const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
+    while (idx < items.length && Date.now() < deadlineMs) {
+      const item = items[idx++];
+      try {
+        const row = await fn(item);
+        if (row != null) out.push(row);
+      } catch {
+        /* skip */
+      }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+/** Sticky AH discovery symbols only — never prices (STOCK_SCANNER_APP_MEMORY allowed). */
+const ahHotSymbols = new Set<string>();
+let universeSymbols: string[] | null = null;
+let universeCursor = 0;
+let ahDiscoverySymbols: string[] | null = null;
+
+async function loadUniverseSymbols(): Promise<string[]> {
+  if (universeSymbols) return universeSymbols;
+  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
+  const candidates = [
+    `${base}/data/universe.json`,
+    "https://xgamer791.github.io/day-trading-stock-scanner/data/universe.json",
+  ];
+  for (const url of candidates) {
+    try {
+      // Same-origin on Pages — no CORS proxy needed for the first URL.
+      const data = (await fetchJsonDirect(url, 12000)) as { symbols?: string[] };
+      universeSymbols = (data.symbols || [])
+        .map((s) => String(s).replace("/", "-").toUpperCase())
+        .filter((s) => s && !isJunk(s));
+      if (universeSymbols.length) return universeSymbols;
+    } catch {
+      /* try next */
+    }
+  }
+  universeSymbols = [];
+  return universeSymbols;
+}
+
+/** Symbols-only AH discovery file from Actions/build — never priced rows. */
+async function loadAhDiscoverySymbols(): Promise<string[]> {
+  if (ahDiscoverySymbols) return ahDiscoverySymbols;
+
+  const parse = (data: { symbols?: string[] } | null): string[] =>
+    (data?.symbols || [])
+      .map((s) => String(s).replace("/", "-").toUpperCase())
+      .filter((s) => s && !isJunk(s));
+
+  // Node / verify scripts: read the committed file directly.
+  if (typeof window === "undefined") {
+    try {
+      const { readFileSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
+      const raw = readFileSync(resolve("public/data/ah-discovery.json"), "utf8");
+      ahDiscoverySymbols = parse(JSON.parse(raw) as { symbols?: string[] });
+      if (ahDiscoverySymbols.length) return ahDiscoverySymbols;
+    } catch {
+      /* fall through to HTTP */
+    }
+  }
+
+  const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
+  const candidates = [
+    `${base}/data/ah-discovery.json`,
+    "https://xgamer791.github.io/day-trading-stock-scanner/data/ah-discovery.json",
+  ];
+  for (const url of candidates) {
+    try {
+      const sep = url.includes("?") ? "&" : "?";
+      const data = (await fetchJsonDirect(`${url}${sep}_=${Date.now()}`, 8000)) as {
+        symbols?: string[];
+      };
+      ahDiscoverySymbols = parse(data);
+      if (ahDiscoverySymbols.length) return ahDiscoverySymbols;
+    } catch {
+      /* try next */
+    }
+  }
+  ahDiscoverySymbols = [];
+  return ahDiscoverySymbols;
+}
+
+async function fetchNasdaqDiscoverySymbols(): Promise<string[]> {
+  try {
+    const data = (await fetchAhTransport(
+      "https://api.nasdaq.com/api/marketmovers?assetclass=stocks&limit=50",
+      10000,
+    )) as {
+      data?: {
+        STOCKS?: Record<string, { table?: { rows?: Array<Record<string, string>> } }>;
+      };
+    };
+    const out: string[] = [];
+    const tables = data?.data?.STOCKS || {};
+    for (const key of [
+      "MostAdvanced",
+      "MostDeclined",
+      "MostActiveByShareVolume",
+      "MostActiveByDollarVolume",
+    ]) {
+      for (const r of tables[key]?.table?.rows || []) {
+        const s = String(r.symbol || "")
+          .replace("/", "-")
+          .toUpperCase();
+        if (s && !isJunk(s, r.name || "")) out.push(s);
+      }
+    }
+    return [...new Set(out)];
+  } catch {
+    return [];
+  }
+}
+
+const AH_CHART_MAX = 48;
+const AH_CHART_CONCURRENCY = 6;
+const AH_CHART_BUDGET_MS = 14_000;
+const AH_UNIVERSE_SLICE = 40;
+
+/**
+ * Wide AH discovery: Yahoo screeners (postMarket*) + Nasdaq movers + sticky hits
+ * + rotating universe slice, then chart includePrePost for names Yahoo screeners miss
+ * (Realtime-parity micros like CLRO/SURG). Soft-fail; never throws into Gainers.
+ */
 async function fetchAfterHoursGainerQuotes(
   dayGainerRaw: Array<Record<string, unknown>>,
+  extraSeeds: string[] = [],
 ): Promise<Map<string, LiveQuote>> {
-  // Broaden beyond day_gainers — AH winners are often flat/down on the day.
-  const extraIds = ["most_actives", "day_losers", "small_cap_gainers"] as const;
-  const extras = await Promise.allSettled(
-    extraIds.map((id) => fetchYahooScreenerRaw(id, 100, 16000, "normal")),
-  );
+  const extraIds = [
+    "most_actives",
+    "day_losers",
+    "small_cap_gainers",
+    "aggressive_small_caps",
+  ] as const;
+
+  const [extrasSettled, nasdaqSeeds, universe, discoverySeeds] = await Promise.all([
+    Promise.allSettled(extraIds.map((id) => fetchYahooScreenerRaw(id, 100, 16000, "normal"))),
+    fetchNasdaqDiscoverySymbols(),
+    loadUniverseSymbols(),
+    loadAhDiscoverySymbols(),
+  ]);
 
   const rawMap = new Map<string, Record<string, unknown>>();
   for (const q of dayGainerRaw) {
@@ -295,7 +497,7 @@ async function fetchAfterHoursGainerQuotes(
       .toUpperCase();
     if (s) rawMap.set(s, q);
   }
-  for (const res of extras) {
+  for (const res of extrasSettled) {
     if (res.status !== "fulfilled") continue;
     for (const q of res.value) {
       const s = String(q.symbol || "")
@@ -303,7 +505,6 @@ async function fetchAfterHoursGainerQuotes(
         .toUpperCase();
       if (!s) continue;
       const prev = rawMap.get(s);
-      // Prefer the quote that carries a live postMarketPrice.
       if (!prev || (Number(q.postMarketPrice) > 0 && !(Number(prev.postMarketPrice) > 0))) {
         rawMap.set(s, q);
       }
@@ -315,6 +516,71 @@ async function fetchAfterHoursGainerQuotes(
     const row = afterHoursQuoteFromRaw(q);
     if (row) map.set(row.symbol, row);
   }
+
+  // Discovery seeds for chart fill — names often absent from Yahoo postMarket screeners.
+  // ah-discovery.json (symbols only) is highest priority for Realtime-parity micros.
+  const needChart = new Set<string>();
+  for (const s of [...discoverySeeds, ...extraSeeds, ...nasdaqSeeds, ...ahHotSymbols]) {
+    const sym = s.toUpperCase();
+    if (!sym || isJunk(sym) || map.has(sym)) continue;
+    needChart.add(sym);
+  }
+  // Screener names with no postMarket* still need an extended-hours chart quote.
+  for (const [sym, q] of rawMap) {
+    if (map.has(sym)) continue;
+    if (!(Number(q.postMarketPrice) > 0)) needChart.add(sym);
+  }
+
+  const firstWave = ahHotSymbols.size < 8;
+  const chartMax = firstWave ? 64 : AH_CHART_MAX;
+
+  if (universe.length) {
+    if (firstWave) {
+      // Spread across the full tape so micros aren't stuck behind A–B alphabet.
+      const step = Math.max(1, Math.floor(universe.length / chartMax));
+      for (let i = 0; i < chartMax; i++) {
+        const sym = universe[(i * step) % universe.length];
+        if (sym && !map.has(sym) && !isJunk(sym)) needChart.add(sym);
+      }
+    } else {
+      const slice = Math.min(AH_UNIVERSE_SLICE, universe.length);
+      for (let i = 0; i < slice; i++) {
+        const sym = universe[(universeCursor + i) % universe.length];
+        if (sym && !map.has(sym) && !isJunk(sym)) needChart.add(sym);
+      }
+      universeCursor = (universeCursor + slice) % universe.length;
+    }
+  }
+
+  const chartList = [...needChart].slice(0, chartMax);
+  if (chartList.length) {
+    const deadline = Date.now() + AH_CHART_BUDGET_MS;
+    const chartRows = await mapPool(chartList, AH_CHART_CONCURRENCY, deadline, async (symbol) => {
+      const payload = await fetchAhTransport(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`,
+        9000,
+      );
+      return afterHoursQuoteFromChart(symbol, payload);
+    });
+    for (const row of chartRows) {
+      if (!map.has(row.symbol) || row.changePct > (map.get(row.symbol)?.changePct || 0)) {
+        map.set(row.symbol, row);
+      }
+      if (row.changePct >= 1) ahHotSymbols.add(row.symbol);
+    }
+  }
+
+  // Keep sticky set bounded.
+  if (ahHotSymbols.size > 120) {
+    const ranked = [...map.values()]
+      .filter((r) => ahHotSymbols.has(r.symbol))
+      .sort((a, b) => b.changePct - a.changePct)
+      .slice(0, 80)
+      .map((r) => r.symbol);
+    ahHotSymbols.clear();
+    for (const s of ranked) ahHotSymbols.add(s);
+  }
+
   return map;
 }
 
@@ -640,7 +906,10 @@ export async function fetchLiveScannerClient(
     includeAfterHours && (session === "afterhours" || session === "closed");
   if (wantAfterHours) {
     try {
-      const ahMap = await fetchAfterHoursGainerQuotes(dayGainerRaw);
+      const ahMap = await fetchAfterHoursGainerQuotes(
+        dayGainerRaw,
+        advanced.map((s) => s.symbol),
+      );
       afterhoursMovers = rankMovers(ahMap.values());
 
       const ahNeed = afterhoursMovers

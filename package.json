@@ -6,6 +6,7 @@
     "dev": "npm run fetch:live && next dev --turbopack",
     "fetch:live": "node scripts/build-universe.mjs && node scripts/fetch-live.mjs",
     "fetch:universe": "node scripts/build-universe.mjs",
+    "fetch:ah-discovery": "node scripts/build-ah-discovery.mjs",
     "prebuild": "npm run fetch:live",
     "build": "next build",
     "start": "next start",
