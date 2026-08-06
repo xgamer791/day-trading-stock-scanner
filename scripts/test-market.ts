@@ -5,6 +5,7 @@ import {
   getMarketCountdown,
   getMarketSession,
   nextRegularOpen,
+  sessionBoardTradingDayKey,
   toMover,
 } from "../src/lib/market";
 
@@ -92,6 +93,23 @@ function testCountdownWeekendToMonday() {
   assert.match(cd.label, /^OPENS IN /);
 }
 
+function testSessionBoardDayKeyRollsAtPremarket() {
+  // Tue 3:59 AM ET — still prior trading day (Mon)
+  const before = etWallTimeToUtc(2026, 8, 4, 3, 59, 0);
+  assert.equal(getMarketSession(before), "closed");
+  assert.equal(sessionBoardTradingDayKey(before), "2026-08-03");
+
+  // Tue 4:00 AM ET — new premarket day; overnight holds must not match this key
+  const open = etWallTimeToUtc(2026, 8, 4, 4, 0, 0);
+  assert.equal(getMarketSession(open), "premarket");
+  assert.equal(sessionBoardTradingDayKey(open), "2026-08-04");
+
+  // Monday regular still keyed to Monday
+  const regular = etWallTimeToUtc(2026, 8, 3, 12, 0, 0);
+  assert.equal(getMarketSession(regular), "regular");
+  assert.equal(sessionBoardTradingDayKey(regular), "2026-08-03");
+}
+
 testTopGainersRanksByPct();
 testLoserRejected();
 testSessionHelper();
@@ -99,4 +117,5 @@ testCountdownDuringRegular();
 testCountdownNearClose();
 testCountdownPremarketOpens();
 testCountdownWeekendToMonday();
+testSessionBoardDayKeyRollsAtPremarket();
 console.log("ok");

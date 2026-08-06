@@ -869,6 +869,12 @@ export async function fetchLiveScannerClient(
   const { includeAfterHours = true } = opts;
   const session = sessionNow();
 
+  // New trading day — drop sticky AH discovery so yesterday's runners do not
+  // seed today's After Hours board after the 4:00 AM ET clear.
+  if (session === "premarket") {
+    ahHotSymbols.clear();
+  }
+
   let advanced: Seed[] = [];
   let dayGainers = new Map<string, LiveQuote>();
   let dayGainerRaw: Array<Record<string, unknown>> = [];
@@ -1021,7 +1027,8 @@ export async function fetchLiveScannerClient(
     // Gainers: regular + afterhours + overnight closed (prior session) until next premarket.
     // Cleared for the premarket window so the new day starts clean.
     gainers: session === "premarket" ? [] : movers,
-    afterhours: afterhoursMovers,
+    // After Hours also clears at premarket — do not carry overnight AH into 4:00 AM.
+    afterhours: session === "premarket" ? [] : afterhoursMovers,
   };
 }
 

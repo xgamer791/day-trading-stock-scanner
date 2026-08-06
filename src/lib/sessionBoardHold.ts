@@ -85,6 +85,8 @@ export function clearHeldBoards(kinds: SessionBoardKind[] = ["premarket", "gaine
   try {
     if (!canUseStorage()) return;
     for (const kind of kinds) sessionStorage.removeItem(storageKey(kind));
+    // Also drop legacy v1 keys if a tab still has them.
+    for (const kind of kinds) sessionStorage.removeItem(`dts-session-board-v1:${kind}`);
   } catch {
     /* ignore */
   }
