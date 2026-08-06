@@ -23,6 +23,7 @@ type Props = {
   activeTab: ScannerTab;
   onTabChange: (tab: ScannerTab) => void;
   onOpenSettings: () => void;
+  onOpenDiagnostics: () => void;
   onRefresh: () => void;
   connected: boolean;
   counts: Partial<Record<ScannerTab, number>>;
@@ -81,6 +82,7 @@ export function SideMenu({
   activeTab,
   onTabChange,
   onOpenSettings,
+  onOpenDiagnostics,
   onRefresh,
   connected,
   counts,
@@ -234,6 +236,24 @@ export function SideMenu({
               </svg>
             </span>
             <span className="drawer__label">Refresh now</span>
+          </button>
+
+          <button
+            type="button"
+            className="drawer__item"
+            onClick={() => {
+              void hapticTap();
+              onClose();
+              onOpenDiagnostics();
+            }}
+          >
+            <span className="drawer__glyph">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path d="M3 12h4l2.5-6 5 12 2.5-6h4" stroke="currentColor" strokeWidth="1.8"
+                      strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <span className="drawer__label">Connection</span>
           </button>
 
           <button

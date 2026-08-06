@@ -35,9 +35,16 @@ but on a healthy device it is never used.
 
 ```bash
 npm ci
-npm run build:ios     # static export (no basePath) → out/ → ios/App/App/public
-npm run ios:open      # opens ios/App/App.xcodeproj in Xcode
+cp .env.example .env.local     # then fill in NEXT_PUBLIC_POLYGON_API_KEY — see below
+npm run build:ios              # static export (no basePath) → out/ → ios/App/App/public
+npm run ios:open               # opens ios/App/App.xcodeproj in Xcode
 ```
+
+> **Set the Polygon key before you build.** The Pages workflow injects it from an Actions
+> secret, but a local iOS build has no such source: without `.env.local` the key compiles
+> to `""`, `hasClientPolygonKey()` is false, and there is **no fallback behind Yahoo** —
+> a single Yahoo failure clears the entire board. Confirm it landed with
+> **Menu ▸ Connection** in the app.
 
 `build:ios` deliberately does three things:
 
@@ -88,6 +95,16 @@ Exit 0 = proven. Non-zero = do not claim the port works. Note that a failure her
 
 > This cannot be run from a restricted CI/agent sandbox: the market-data hosts are
 > usually blocked there (`403 Host not in allowlist`). Run it on your Mac.
+
+### 1b. Menu ▸ Connection — on-device transport report
+
+When the board is empty and the badge reads RECONNECTING, open the drawer and tap
+**Connection**. It probes each transport in turn — native direct, native + Yahoo crumb,
+Nasdaq direct, and the proxy ladder — and reports status, latency and the actual error for
+each, plus whether the Polygon key made it into the build. Tap **Copy report** to paste it
+somewhere useful.
+
+This is a one-shot probe: it never feeds the board and never stores a quote.
 
 ### 2. On-device — manual
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { NewsFeed, PanelHeader, StockTable } from "@/components/Panels";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ScannerHeader, type ScannerTab } from "@/components/ScannerHeader";
+import { DiagnosticsSheet } from "@/components/DiagnosticsSheet";
 import { SideMenu } from "@/components/SideMenu";
 import {
   EMPTY_VIEW_FILTER,
@@ -68,6 +69,7 @@ export function ScannerBoard() {
   const [viewFilter, setViewFilter] = useState<ViewFilter>(EMPTY_VIEW_FILTER);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [rules, setRules] = useState<AlertRule[]>([]);
 
@@ -132,7 +134,17 @@ export function ScannerBoard() {
     let cancelled = false;
 
     const tick = async () => {
-      if (inFlight.current || pausedRef.current) return;
+      if (inFlight.current) return;
+      /*
+       * `pausedRef` is set from Capacitor's appStateChange. If that resume event is
+       * ever missed or arrives out of order, a stuck `paused` flag would silently
+       * stop polling forever — no fetch, no error, just a permanently RECONNECTING
+       * badge over an empty board. The WebView's own visibility is the ground truth,
+       * so a visible document always wins and the pause self-heals.
+       */
+      const visible =
+        typeof document === "undefined" || document.visibilityState === "visible";
+      if (pausedRef.current && !visible) return;
       inFlight.current = true;
       try {
         // LIVE ONLY — never live.json / snapshot (STOCK_SCANNER_APP_MEMORY.md)
@@ -450,6 +462,7 @@ export function ScannerBoard() {
         activeTab={mobileTab}
         onTabChange={setMobileTab}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenDiagnostics={() => setDiagOpen(true)}
         onRefresh={refreshNow}
         connected={connected}
         counts={{
@@ -459,6 +472,8 @@ export function ScannerBoard() {
           ah: filtered.afterhours.length,
         }}
       />
+
+      <DiagnosticsSheet open={diagOpen} onClose={() => setDiagOpen(false)} />
 
       <SettingsSheet
         open={settingsOpen}
