@@ -1176,14 +1176,16 @@ export async function fetchLiveScannerClient(
   // Prefer Yahoo day_gainers when available (Flt + product parity).
   // If Yahoo CORS proxies fail: Polygon live gainers (direct CORS).
   // NEVER paint Most Advanced / spark-only as the ranked board.
-  let quotes: Map<string, LiveQuote>;
+  // During afterhours/closed: soft-empty Gainers (UI holds last board) so AH
+  // can still seed — do not throw away the whole poll.
+  let quotes: Map<string, LiveQuote> = new Map();
   if (dayGainers.size) {
     quotes = new Map(dayGainers);
     sourceLabel = "full-us-realtime";
   } else if (polygonGainers.size) {
     quotes = new Map(polygonGainers);
     sourceLabel = "polygon";
-  } else {
+  } else if (session === "regular") {
     const detail = [yahooErr?.message, polygonErr?.message].filter(Boolean).join(" | ");
     throw new Error(
       detail ? `Live gainers unavailable: ${detail}` : "Live Yahoo day_gainers unavailable",
@@ -1239,10 +1241,13 @@ export async function fetchLiveScannerClient(
   // After Hours board — during 16:00–20:00 ET and overnight closed until the
   // next premarket (Yahoo still carries postMarket* on the prior session).
   // Ranked by post-market % vs regular close, not regular day_gainers %.
-  // Soft-fail (never kill Gainers). Skipped when the AH tab is not visible.
+  // Soft-fail (never kill Gainers). Always build during the afterhours window
+  // so the prior-session hold is written even if the AH tab was never opened;
+  // during overnight closed, only fetch when the AH tab is on screen (hold covers the rest).
   let afterhoursMovers: StockMover[] = [];
   const wantAfterHours =
-    includeAfterHours && (session === "afterhours" || session === "closed");
+    session === "afterhours" ||
+    (includeAfterHours && session === "closed");
   if (wantAfterHours) {
     try {
       const ahMap = await fetchAfterHoursGainerQuotes(
@@ -1267,7 +1272,10 @@ export async function fetchLiveScannerClient(
     }
   }
 
-  if (session !== "closed" && movers.length < 3) {
+  // During regular: require a real ranked board. During afterhours/closed the
+  // Gainers tab is prior-session hold territory — soft-empty so AH can still
+  // seed/refresh and UI keeps held Gainers rows (do not throw away the day).
+  if (session === "regular" && movers.length < 3) {
     throw new Error(`Live quotes unavailable (${movers.length})`);
   }
 
@@ -1282,7 +1290,7 @@ export async function fetchLiveScannerClient(
     news,
     // Premarket is built on the early-return path above during 4:00–9:30 ET.
     premarket: [],
-    // Gainers: regular + afterhours + overnight closed (prior session) until next premarket.
+    // Gainers: regular live; afterhours/closed may be empty (UI holds last board).
     gainers: movers,
     // After Hours also clears at premarket — do not carry overnight AH into 4:00 AM.
     afterhours: afterhoursMovers,

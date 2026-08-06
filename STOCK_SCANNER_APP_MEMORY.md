@@ -87,16 +87,22 @@ This is non-negotiable. Violating it is a failed change.
 
 **Do not reintroduce:** throwing `Live premarket quotes unavailable` on empty, `setData(null)` while a strong same-session hold exists, or unbounded Premarket chart storms.
 
-### Hold durability after 9:30 ET (fixed again 2026-08-06 afternoon)
+### Hold durability — ALL session boards (fixed 2026-08-06)
 
-**Symptom:** Premarket tab empty with “Live data error” / reconnecting during RTH even after a good morning board.
+**Rule:** Premarket, Gainers, and After Hours each keep their last live board after that window ends until the next weekday **4:00 AM ET premarket**, then clear together. Same durability for all three — do not “fix Premarket only.”
 
-**Root causes (both required):**
-1. Static export SSR: `useState(() => readHeldBoard())` runs with no `sessionStorage` → `[]`, and React never re-ran the initializer on the client — **must rehydrate holds in a mount `useEffect`**.
-2. Poll `catch` `hasHold` only counted Premarket during `premarket` session — during `regular`, a Gainers transport miss called `setData(null)` even when `heldPremarket` existed. During RTH, live returns `premarket: []` by design; **Premarket is hold-only after 9:30** — any hold must block `setData(null)`.
-3. Premarket `emptyText` must not show “Live data error” outside the premarket window (Gainers reconnect is not a Premarket board failure).
+**Live windows:** Premarket 4:00–9:30 · Gainers 9:30–16:00 · After Hours 16:00–20:00. Outside the live window the tab is **hold-only**.
 
-**Do not reintroduce:** session-narrow `hasHold`, or relying on `useState(readHeldBoard)` alone under `output: "export"`.
+**Required mechanics (all three):**
+1. Mount **rehydrate** from `sessionStorage` (static export SSR leaves `useState(readHeldBoard)` as `[]`).
+2. Poll `catch`: **any** non-empty hold blocks `setData(null)`.
+3. `setData` always uses `preferStrongerBoard` for all three — never paint forced `[]` over a hold.
+4. `emptyText` shows “Live data error” **only** inside that board’s live window.
+5. Holding subtitle when `!isLiveWindow && rows.length` (Gainers hold must show during afterhours **and** closed — not closed-only).
+6. After Hours: **always fetch during the afterhours window** so the hold is written even if the AH tab was never opened; overnight closed may fetch only when the AH tab is visible.
+7. During afterhours/closed: soft-empty Gainers when Yahoo/Polygon miss (do not throw before AH can seed).
+
+**Do not reintroduce:** session-narrow `hasHold`, closed-only Gainers hold subtitle, AH fetch only when tab selected during the live AH window, or throwing away the whole poll on Gainers miss after 16:00.
 
 ---
 

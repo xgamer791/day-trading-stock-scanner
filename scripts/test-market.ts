@@ -120,6 +120,20 @@ function testPremarketHoldKeySurvivesRegularSession() {
   assert.equal(sessionBoardTradingDayKey(rth), "2026-08-06");
 }
 
+/** Gainers + AH holds share the same trading-day key through afterhours and overnight closed. */
+function testAllSessionHoldKeysAlignThroughClose() {
+  const regular = etWallTimeToUtc(2026, 8, 6, 12, 0, 0);
+  const ah = etWallTimeToUtc(2026, 8, 6, 17, 0, 0);
+  const closed = etWallTimeToUtc(2026, 8, 6, 21, 0, 0);
+  assert.equal(getMarketSession(regular), "regular");
+  assert.equal(getMarketSession(ah), "afterhours");
+  assert.equal(getMarketSession(closed), "closed");
+  const key = sessionBoardTradingDayKey(regular);
+  assert.equal(sessionBoardTradingDayKey(ah), key);
+  assert.equal(sessionBoardTradingDayKey(closed), key);
+  assert.equal(key, "2026-08-06");
+}
+
 testTopGainersRanksByPct();
 testLoserRejected();
 testSessionHelper();
@@ -129,4 +143,5 @@ testCountdownPremarketOpens();
 testCountdownWeekendToMonday();
 testSessionBoardDayKeyRollsAtPremarket();
 testPremarketHoldKeySurvivesRegularSession();
+testAllSessionHoldKeysAlignThroughClose();
 console.log("ok");
