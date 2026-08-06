@@ -1,18 +1,44 @@
 /**
- * Shared browser CORS transport (STOCK_SCANNER_APP_MEMORY.md).
+ * Shared transport (STOCK_SCANNER_APP_MEMORY.md).
  *
- * Public proxies are flaky; this module:
- *  - Prefers allorigins `/get` (unwraps `{ contents }`) — `/raw` often 500s
- *  - Sticky proxy preference (transport only — not quote data)
- *  - Priority queue so News cannot stampede the 3s gainers poll
- *  - Optional owned proxy via NEXT_PUBLIC_QUOTE_PROXY_URL
+ * Two lanes, same ladder:
+ *
+ *  - **iOS / Capacitor** — `native-direct` calls the upstream API straight through
+ *    native URLSession. No same-origin policy, so no proxy is needed at all. This is
+ *    tried first and, thanks to the sticky-preference logic below, becomes the only
+ *    path attempted once it succeeds.
+ *  - **Browser (GitHub Pages)** — public proxies are flaky, so this module:
+ *      - Prefers allorigins `/get` (unwraps `{ contents }`) — `/raw` often 500s
+ *      - Sticky proxy preference (transport only — not quote data)
+ *      - Priority queue so News cannot stampede the 3s gainers poll
+ *      - Optional owned proxy via NEXT_PUBLIC_QUOTE_PROXY_URL
+ *
+ * The native attempts are only ever *added* (see `buildAttempts`), so the browser
+ * build's behaviour is unchanged: on web `isNativeApp()` is false and the attempt
+ * list is identical to before. If a native direct call ever fails, its circuit trips
+ * and the app falls back to the exact proxy ladder it uses today — degraded, never
+ * broken.
  *
  * Proxies return live upstream payloads only — never live.json.
  */
+import {
+  isNativeApp,
+  looksLikeYahooCrumbFailure,
+  nativeGetText,
+  resetYahooCrumb,
+  withYahooCrumb,
+} from "@/lib/nativeHttp";
 
 export type TransportPriority = "critical" | "normal" | "low";
 
-type ProxyKind = "owned" | "allorigins-get" | "allorigins-raw" | "corsproxy" | "codetabs";
+type ProxyKind =
+  | "native-direct"
+  | "native-crumb"
+  | "owned"
+  | "allorigins-get"
+  | "allorigins-raw"
+  | "corsproxy"
+  | "codetabs";
 
 type ProxyAttempt = {
   kind: ProxyKind;
@@ -20,6 +46,10 @@ type ProxyAttempt = {
   /** Response is `{ contents: string, status?: { http_code?: number } }` */
   unwrapContents?: boolean;
 };
+
+function isNativeKind(kind: ProxyKind): boolean {
+  return kind === "native-direct" || kind === "native-crumb";
+}
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
@@ -47,9 +77,18 @@ function markSuccess(kind: ProxyKind) {
 function markFailure(kind: ProxyKind) {
   const n = (failCounts.get(kind) || 0) + 1;
   failCounts.set(kind, n);
-  // Soft circuit — don't exile allorigins-get for long; it's the main public path.
-  const threshold = kind === "allorigins-get" || kind === "owned" ? 3 : 2;
-  const coolMs = kind === "allorigins-get" || kind === "owned" ? 8_000 : 20_000;
+  // Soft circuit — don't exile the main paths for long.
+  // `native-direct` is the iOS happy path and a transient upstream blip must not
+  // banish it in favour of the (much worse) public proxies, so it cools fastest.
+  let threshold = 2;
+  let coolMs = 20_000;
+  if (isNativeKind(kind)) {
+    threshold = 3;
+    coolMs = 5_000;
+  } else if (kind === "allorigins-get" || kind === "owned") {
+    threshold = 3;
+    coolMs = 8_000;
+  }
   if (n >= threshold) {
     circuitUntil.set(kind, Date.now() + coolMs);
   }
@@ -66,6 +105,20 @@ function buildAttempts(targetUrl: string): ProxyAttempt[] {
   const owned = ownedProxyBase();
 
   const all: ProxyAttempt[] = [];
+
+  // iOS/Capacitor: hit the upstream API directly through native URLSession.
+  // There is no CORS to work around, so a proxy would only add latency and a
+  // third-party failure mode. On web this block is skipped entirely, which is why
+  // the browser attempt list is byte-for-byte what it was before.
+  if (isNativeApp()) {
+    all.push({ kind: "native-direct", url: live });
+    // Yahoo periodically starts demanding a cookie+crumb. Only reachable if
+    // `native-direct` failed first, and the crumb itself is established lazily.
+    if (/\.yahoo\.com/i.test(targetUrl)) {
+      all.push({ kind: "native-crumb", url: live });
+    }
+  }
+
   if (owned) {
     all.push({ kind: "owned", url: `${owned}?url=${enc}` });
   }
@@ -143,7 +196,7 @@ let activeNonCritical = 0;
  * Now: a small total pool, with slots *reserved* for critical work so the ranked
  * gainers poll can always start immediately.
  */
-const MAX_ACTIVE = 2;
+const MAX_ACTIVE_WEB = 2;
 /**
  * Non-critical work may never occupy more than this many slots, which leaves at
  * least one slot permanently available to `critical`. The original comment here
@@ -151,7 +204,30 @@ const MAX_ACTIVE = 2;
  * punish parallelism — so the fix is the *reservation*, not raw concurrency.
  * Two total is the smallest pool that can guarantee critical never blocks.
  */
-const MAX_NONCRITICAL_ACTIVE = 1;
+const MAX_NONCRITICAL_ACTIVE_WEB = 1;
+
+/**
+ * Native lanes.
+ *
+ * The tiny web pool exists because free public proxies punish parallelism — that
+ * constraint simply does not exist for native URLSession talking straight to Yahoo
+ * and Nasdaq, so Flt enrichment and news no longer have to trickle.
+ *
+ * The pool is widened but NOT removed, and the reserved-critical-slot invariant
+ * (`MAX_NONCRITICAL_ACTIVE < MAX_ACTIVE`) is preserved. Both matter: if a native
+ * direct call ever fails and the app falls back to the proxy ladder, the queue is
+ * the only thing standing between us and the documented starvation bug.
+ */
+const MAX_ACTIVE_NATIVE = 6;
+const MAX_NONCRITICAL_ACTIVE_NATIVE = 4;
+
+function maxActive(): number {
+  return isNativeApp() ? MAX_ACTIVE_NATIVE : MAX_ACTIVE_WEB;
+}
+
+function maxNonCriticalActive(): number {
+  return isNativeApp() ? MAX_NONCRITICAL_ACTIVE_NATIVE : MAX_NONCRITICAL_ACTIVE_WEB;
+}
 
 /**
  * A queued non-critical job older than this is for a superseded poll — drop it
@@ -160,9 +236,9 @@ const MAX_NONCRITICAL_ACTIVE = 1;
 const STALE_QUEUE_MS = 20_000;
 
 function canStart(job: QueueJob<unknown>): boolean {
-  if (active >= MAX_ACTIVE) return false;
+  if (active >= maxActive()) return false;
   if (job.priority === "critical") return true;
-  return activeNonCritical < MAX_NONCRITICAL_ACTIVE;
+  return activeNonCritical < maxNonCriticalActive();
 }
 
 function pumpQueue() {
@@ -199,7 +275,7 @@ function pumpQueue() {
         pumpQueue();
       });
 
-    if (active >= MAX_ACTIVE) return;
+    if (active >= maxActive()) return;
   }
 }
 
@@ -216,6 +292,38 @@ function enqueue<T>(priority: TransportPriority, run: () => Promise<T>): Promise
   });
 }
 
+/**
+ * Run one attempt and return its raw body.
+ *
+ * Native attempts go out through URLSession (no CORS, real UA, real cookie jar);
+ * proxy attempts use browser `fetch` exactly as before.
+ */
+async function runAttempt(attempt: ProxyAttempt, budget: number): Promise<string> {
+  if (attempt.kind === "native-direct") {
+    return nativeGetText(attempt.url, budget);
+  }
+  if (attempt.kind === "native-crumb") {
+    const url = await withYahooCrumb(attempt.url);
+    try {
+      return await nativeGetText(url, budget);
+    } catch (e) {
+      // A crumb that stopped working must not be reused for the next 3s poll.
+      if (looksLikeYahooCrumbFailure(e)) resetYahooCrumb();
+      throw e;
+    }
+  }
+
+  const res = await fetch(attempt.url, {
+    cache: "no-store",
+    headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+    signal: AbortSignal.timeout(budget),
+  });
+  if (!res.ok) {
+    throw new Error(`${attempt.kind} ${res.status}`);
+  }
+  return res.text();
+}
+
 async function fetchTextUnqueued(targetUrl: string, timeoutMs: number): Promise<string> {
   let lastErr: Error | null = null;
   const attempts = buildAttempts(targetUrl);
@@ -223,23 +331,16 @@ async function fetchTextUnqueued(targetUrl: string, timeoutMs: number): Promise<
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     // allorigins/get often needs >10s; don't abort early on the preferred path.
-    const budget =
-      attempt.kind === "allorigins-get" || attempt.kind === "owned"
+    // Native is a direct call to the origin — it should be fast, and giving it the
+    // full budget would delay the proxy fallback when a host rejects direct calls.
+    const budget = isNativeKind(attempt.kind)
+      ? Math.min(timeoutMs, 12_000)
+      : attempt.kind === "allorigins-get" || attempt.kind === "owned"
         ? timeoutMs
         : Math.min(timeoutMs, i === 0 ? timeoutMs : Math.max(3500, Math.floor(timeoutMs * 0.5)));
 
     try {
-      const res = await fetch(attempt.url, {
-        cache: "no-store",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-        signal: AbortSignal.timeout(budget),
-      });
-      if (!res.ok) {
-        lastErr = new Error(`${attempt.kind} ${res.status}`);
-        markFailure(attempt.kind);
-        continue;
-      }
-      const raw = await res.text();
+      const raw = await runAttempt(attempt, budget);
       if (!raw.trim()) {
         lastErr = new Error(`${attempt.kind} empty`);
         markFailure(attempt.kind);
@@ -302,11 +403,21 @@ export async function fetchJsonViaCors(
   return JSON.parse(text);
 }
 
-/** Direct browser fetch (no proxy) — for APIs that send ACAO (e.g. Polygon). */
+/**
+ * Direct fetch, no proxy — for APIs that send ACAO (e.g. Polygon), and for every
+ * API once we're inside the native shell.
+ */
 export async function fetchJsonDirect(
   url: string,
   timeoutMs = 12000,
 ): Promise<unknown> {
+  if (isNativeApp()) {
+    // URLSession: no CORS, so this works for Yahoo/Nasdaq too, not just Polygon.
+    const text = await nativeGetText(bust(url), timeoutMs);
+    if (text.trimStart().startsWith("<")) throw new Error("native HTML response");
+    return JSON.parse(text);
+  }
+
   const res = await fetch(bust(url), {
     cache: "no-store",
     headers: { Accept: "application/json", "Cache-Control": "no-cache", Pragma: "no-cache" },

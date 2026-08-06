@@ -157,6 +157,62 @@ Rules going forward:
 
 ---
 
+## iOS / Capacitor build (added 2026-08-06)
+
+The app now ships as a native iOS app **and** the GitHub Pages site from one codebase.
+`CAPACITOR_BUILD=true` → no `basePath`; `GITHUB_PAGES=true` → Pages basePath. Operational
+detail lives in `docs/IOS.md`. **Every rule above still applies inside the iOS app.**
+
+### Native transport — do not "simplify" this
+
+- `src/lib/nativeHttp.ts` wraps `CapacitorHttp` (native `URLSession`). No CORS, real
+  User-Agent, real cookie jar.
+- `corsTransport.ts` gains exactly **one** new attempt kind, `native-direct`, prepended
+  only when `isNativeApp()`. The existing sticky-preference logic then stops attempting
+  proxies once it succeeds.
+- **The proxy ladder stays.** If a host ever rejects direct calls, native falls back to
+  today's exact proxy chain — degraded, not broken. Do not delete it.
+- `CapacitorHttp: { enabled: false }` in `capacitor.config.ts` is deliberate. That flag
+  only controls *global* fetch monkey-patching; `CapacitorHttp.request()` is called
+  explicitly. Enabling it would break the `AbortSignal.timeout` / `cache: "no-store"`
+  semantics this transport depends on.
+- Queue caps are raised on native (`MAX_ACTIVE` 2→6) but the **reserved-critical-slot
+  invariant is preserved** (`MAX_NONCRITICAL_ACTIVE < MAX_ACTIVE`), as is
+  `FLOAT_TOTAL_BUDGET_MS`. Removing the queue would reintroduce the 2026-08-05 starvation
+  bug the moment the app fell back to proxies.
+- `isNativeApp()` must only ever be called **lazily inside functions**. `next build`
+  prerenders in Node; touching a Capacitor global at module scope breaks the build.
+
+### ZERO CACHING on iOS
+
+- `npm run build:ios` deletes `out/data` before sync, so `live.json` / `floats.json` are
+  **not in the app bundle at all**. This is the rule made structurally unbreakable — do
+  not re-add them.
+- No service worker. No `URLCache` reuse: every native request sends no-cache headers
+  plus the existing `bust()` param.
+- **Alert rules and display settings in `@capacitor/preferences` are ALLOWED.** Those are
+  user settings, not market data. The rule forbids persisting quotes / gainers / float —
+  and nothing in `src/lib/alerts.ts` writes a price, %, volume or float anywhere. The
+  fired-alert dedupe set is in memory only and must stay that way.
+- **Pausing polling on background and calling `setData(null)` is COMPLIANT, not a
+  violation.** It declines to fetch while invisible, and clearing rows is what guarantees
+  pre-background prices can never repaint as LIVE on resume. The first act of a resumed
+  app is a fresh live poll. Do not "optimise" this into retaining the last payload.
+- The Search / view-filter controls filter **already-live rows after ranking**. They never
+  change what qualifies for the board; the only ranking filter is still top 50 by % gain.
+
+### Verifying the iOS build
+
+`npm run verify:native` is the gate — it proves direct no-proxy reachability, same-payload
+%Chg math, and ≥70% Flt coverage on the top 15. Node's fetch runs under the same
+conditions as `URLSession`, so a pass is real proof.
+
+It **cannot** run from a restricted agent sandbox — the market-data hosts return
+`403 Host not in allowlist` there. That is an environment limit, not a failing app: say so
+plainly rather than claiming verification you did not do.
+
+---
+
 ## Before every PR / push checklist
 
 - [ ] Read this file again
@@ -168,3 +224,6 @@ Rules going forward:
 - [ ] **VERIFY YOUR WORK:** live Pages Gainers table shows numeric Flt for most top runners; LIVE not stuck RECONNECTING / “Load failed”
 - [ ] Deployed Pages link verified after change
 - [ ] If user asked for a second-agent visual check: use **another Grok agent**, not another provider
+- [ ] **iOS:** `npm run build:ios` succeeds and `out/data` is absent from the bundle
+- [ ] **iOS:** `npm run verify:native` passes on an unrestricted machine (or is explicitly reported as un-run)
+- [ ] **iOS:** web Pages build still emits the `/day-trading-stock-scanner` basePath

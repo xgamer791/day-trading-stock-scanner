@@ -17,9 +17,19 @@
   --amber: #f5a524;
   --accent: #3d8bfd;
   --hod: #00e5a8;
-  --font-sans: "Satoshi", sans-serif;
-  --font-display: "Clash Grotesk", "Satoshi", sans-serif;
-  --font-mono: "Kode Mono", ui-monospace, monospace;
+  /* Full local fallbacks — the webfonts are CDN-hosted and must never be a
+     single point of failure for legibility inside the iOS app. */
+  --font-sans: "Satoshi", -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-display: "Clash Grotesk", "Satoshi", -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    system-ui, sans-serif;
+  --font-mono: "Kode Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Safe areas (iOS notch / home indicator). 0 everywhere else. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --tabbar-h: 52px;
 }
 
 * {
@@ -85,6 +95,10 @@ a {
   color: var(--text);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
+  /* Paint under the notch, keep controls below it. */
+  padding-top: var(--safe-top);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
 }
 
 .rts-header__top {
@@ -94,6 +108,15 @@ a {
   gap: 2px;
   min-height: 44px;
   padding: 6px 8px 0;
+}
+
+/* Countdown + LIVE pill + NO CACHE chip share the centre cell. */
+.rts-headline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .rts-countdown {
@@ -454,4 +477,574 @@ a {
   color: #8b939e;
   text-align: right;
   justify-self: end;
+}
+
+/* ==================================================================
+   iOS shell — bottom tab bar, live status pill, pull-to-refresh,
+   search bar and the settings sheet.
+
+   All of this is additive. On the >960px desktop grid the tab bar and
+   the mobile-only chrome stay hidden, so the existing web layout is
+   unchanged.
+   ================================================================== */
+
+/* ---------------------------- live pill ---------------------------- */
+
+.rts-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.03);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rts-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rts-status--live {
+  color: var(--green);
+  border-color: rgba(22, 199, 132, 0.45);
+}
+
+.rts-status--live .rts-status__dot {
+  background: var(--green);
+}
+
+.rts-status--down {
+  color: var(--red);
+  border-color: rgba(234, 57, 67, 0.45);
+}
+
+.rts-status--down .rts-status__dot {
+  background: var(--red);
+}
+
+.rts-status__time {
+  color: var(--text-faint);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.rts-nocache {
+  flex-shrink: 0;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* --------------------------- search bar --------------------------- */
+
+.rts-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 10px;
+  padding-left: calc(12px + var(--safe-left));
+  padding-right: calc(12px + var(--safe-right));
+}
+
+.rts-search__field {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-row);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  outline: none;
+}
+
+.rts-search__field::placeholder {
+  color: var(--text-faint);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.rts-search__cancel {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.rts-icon-btn--on {
+  color: var(--accent);
+}
+
+/* ------------------------ pull to refresh ------------------------ */
+
+.ptr {
+  position: relative;
+  overflow: hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ptr__spinner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ptr__inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  will-change: transform;
+}
+
+/* --------------------------- tab bar --------------------------- */
+
+.ios-tabbar {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  align-items: stretch;
+  height: calc(var(--tabbar-h) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  background: rgba(11, 13, 16, 0.82);
+  -webkit-backdrop-filter: saturate(180%) blur(22px);
+  backdrop-filter: saturate(180%) blur(22px);
+  border-top: 1px solid var(--border);
+}
+
+.ios-tabbar__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  padding: 4px 0 2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease;
+}
+
+.ios-tabbar__item--active {
+  color: var(--green);
+}
+
+.ios-tabbar__item:active {
+  opacity: 0.6;
+}
+
+.ios-tabbar__icon {
+  position: relative;
+  display: inline-flex;
+  line-height: 0;
+}
+
+.ios-tabbar__badge {
+  position: absolute;
+  top: -3px;
+  right: -9px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+.ios-tabbar__item--active .ios-tabbar__badge {
+  background: var(--green);
+  color: #04120c;
+}
+
+.ios-tabbar__label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* --------------------------- settings sheet --------------------------- */
+
+.sheet__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  animation: sheet-fade 0.2s ease-out;
+}
+
+@keyframes sheet-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-rise {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.sheet {
+  width: 100%;
+  max-width: 560px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  padding-bottom: var(--safe-bottom);
+  animation: sheet-rise 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sheet__grabber {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  margin: 8px auto 2px;
+  flex-shrink: 0;
+}
+
+.sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sheet__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.sheet__done {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+
+.sheet__body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 16px 20px;
+}
+
+.sheet__section {
+  margin: 18px 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sheet__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sheet__row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sheet__row-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sheet__row-hint {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.sheet__note,
+.sheet__empty,
+.sheet__footer {
+  margin: 6px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.sheet__footer {
+  margin-top: 22px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sheet__toggle {
+  flex-shrink: 0;
+  width: 50px;
+  height: 30px;
+  border-radius: 999px;
+  border: none;
+  background: var(--border-strong);
+  padding: 2px;
+  cursor: pointer;
+  transition: background 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sheet__toggle--on {
+  background: var(--green);
+}
+
+.sheet__toggle-knob {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateX(0);
+  transition: transform 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sheet__toggle--on .sheet__toggle-knob {
+  transform: translateX(20px);
+}
+
+.sheet__ruleactions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sheet__del {
+  border: none;
+  background: transparent;
+  color: var(--red);
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px;
+  cursor: pointer;
+}
+
+.sheet__ruleadd {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 6px;
+}
+
+.sheet__ruleinput {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-row);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  outline: none;
+}
+
+.sheet__ruleinput--pct {
+  flex: 0 0 74px;
+  text-align: right;
+}
+
+.sheet__add {
+  flex-shrink: 0;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 9px;
+  border: none;
+  background: var(--green);
+  color: #04120c;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sheet__numwrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.sheet__num {
+  width: 92px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-row);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  text-align: right;
+  outline: none;
+}
+
+.sheet__numsuffix {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+  width: 12px;
+}
+
+.sheet__clear {
+  width: 100%;
+  margin-top: 14px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--red);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ------------- mobile / native layout switches ------------- */
+
+@media (max-width: 960px) {
+  /* The bottom tab bar replaces the top tab strip — never show both. */
+  .ios-tabbar {
+    display: flex;
+  }
+
+  .rts-header__tabs-row {
+    display: none;
+  }
+
+  .panel {
+    /* Keep the last table row clear of the tab bar. */
+    padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom));
+  }
+
+  .scanner-grid {
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+}
+
+/*
+   Header budget on a 390px iPhone: 38px menu + 3×38px actions = 152px of chrome,
+   leaving ~240px for the countdown + status. That is not enough for all three
+   elements, so shed the least load-bearing ones as width drops. The LIVE /
+   RECONNECTING state is never shed — it is the only signal that the board is stale.
+*/
+@media (max-width: 700px) {
+  .rts-nocache {
+    display: none;
+  }
+}
+
+@media (max-width: 440px) {
+  .rts-status__time {
+    display: none;
+  }
+
+  .rts-countdown {
+    font-size: 13px;
+    margin-left: 2px;
+  }
+
+  .rts-status {
+    font-size: 9px;
+    padding: 3px 7px 3px 6px;
+  }
+}
+
+/* Standalone/native: the header already owns the notch inset, and rubber-band
+   scrolling of the whole document would peel the fixed tab bar off the screen. */
+@supports (-webkit-touch-callout: none) {
+  body {
+    overscroll-behavior-y: none;
+  }
 }

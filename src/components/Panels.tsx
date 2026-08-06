@@ -1,6 +1,8 @@
 "use client";
 
 import { formatFloat, formatPct, formatPrice, formatVolume, timeAgo } from "@/lib/market";
+import { isNativeApp } from "@/lib/nativeHttp";
+import { openExternal } from "@/lib/nativeUi";
 import type { NewsItem, StockMover } from "@/lib/types";
 
 export function PanelHeader({
@@ -74,6 +76,15 @@ export function NewsFeed({ items, loading = false }: { items: NewsItem[]; loadin
               rel="noreferrer"
               className="news6__row"
               style={{ animationDelay: `${Math.min(idx, 12) * 20}ms` }}
+              onClick={(e) => {
+                // Inside the native shell `target="_blank"` has nowhere to go — open the
+                // in-app Safari view instead so the user keeps their place on the board.
+                void (async () => {
+                  const opened = await openExternal(item.url);
+                  if (opened) e.preventDefault();
+                })();
+                if (isNativeApp()) e.preventDefault();
+              }}
             >
               <span className="news6__ticker" style={{ background: tickerColor(sym) }}>
                 {sym.slice(0, 5)}
