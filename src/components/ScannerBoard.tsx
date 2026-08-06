@@ -69,9 +69,9 @@ export function ScannerBoard() {
     return () => clearInterval(id);
   }, []);
 
-  // New trading morning: wipe ALL boards at premarket open (4:00 AM ET).
-  // Clock is authoritative — a stale poll still labeled "closed" must not keep
-  // overnight Premarket / Gainers / After Hours on screen.
+  // New trading morning: wipe PRIOR-DAY holds at premarket open (4:00 AM ET).
+  // Clock already hides Gainers/AH. Do NOT null the live payload forever —
+  // strip overnight rows, then let the 3s poll populate Premarket with live data.
   useEffect(() => {
     if (clockSession !== "premarket") {
       clearedForPremarketRef.current = false;
@@ -84,8 +84,17 @@ export function ScannerBoard() {
     setHeldPremarket([]);
     setHeldGainers([]);
     setHeldAfterhours([]);
-    // Drop overnight live payload so preferStrongerBoard cannot repaint it.
-    setData(null);
+    setData((prev) => {
+      if (!prev) return null;
+      // Drop yesterday's boards; next live poll fills `premarket`.
+      return {
+        ...prev,
+        session: "premarket",
+        gainers: [],
+        afterhours: [],
+        premarket: [],
+      };
+    });
   }, [clockSession]);
 
   useEffect(() => {
@@ -113,6 +122,8 @@ export function ScannerBoard() {
         const nowSession = getMarketSession();
         // If a poll started overnight and finished after 4:00 AM ET, strip
         // Gainers/AH so we never re-seed cleared boards from a stale payload.
+        // Always keep `live.premarket` when the clock is in premarket so we
+        // populate the Premarket tab with new live rows (not an empty board).
         const payload =
           nowSession === "premarket"
             ? {
@@ -120,7 +131,7 @@ export function ScannerBoard() {
                 session: "premarket" as const,
                 gainers: [] as StockMover[],
                 afterhours: [] as StockMover[],
-                premarket: live.session === "premarket" ? live.premarket : [],
+                premarket: live.premarket,
               }
             : live;
 
@@ -238,7 +249,8 @@ export function ScannerBoard() {
   // flip off a strong Most-Advanced merge). Failed poll clears LIVE (`data` null)
   // — do not paint held as LIVE during an active window (APP_MEMORY).
   // Closed: keep last strong board until next premarket (4:00 AM ET).
-  // Premarket open: ALL prior boards stay empty (holds + data wiped above).
+  // Premarket open: prior-day holds wiped above; Premarket tab then fills from
+  // live polls (data.premarket). Gainers/AH stay empty until their windows.
   const premarketRows =
     session === "premarket"
       ? (data?.premarket ?? [])

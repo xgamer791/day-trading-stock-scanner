@@ -211,7 +211,9 @@ async function fetchYahooScreenerRaw(
   return data?.finance?.result?.[0]?.quotes || [];
 }
 
-async function fetchYahooDayGainerQuotes(): Promise<{
+async function fetchYahooDayGainerQuotes(
+  forPremarket = false,
+): Promise<{
   map: Map<string, LiveQuote>;
   raw: Array<Record<string, unknown>>;
 }> {
@@ -241,11 +243,19 @@ async function fetchYahooDayGainerQuotes(): Promise<{
       .toUpperCase();
     const name = String(q.shortName || q.longName || symbol);
     if (!symbol || isJunk(symbol, name)) continue;
-    const last = Number(q.regularMarketPrice) || 0;
     const prevClose = Number(q.regularMarketPreviousClose) || 0;
-    const dayHigh = Number(q.regularMarketDayHigh) || last;
+    // Premarket board: prefer preMarketPrice vs prior close (Realtime gap %).
+    // Fall back to regularMarketPrice when Yahoo has not stamped premarket yet.
+    const pre = Number(q.preMarketPrice) || 0;
+    const regular = Number(q.regularMarketPrice) || 0;
+    const last = forPremarket && pre > 0 ? pre : regular;
+    if (!(last > 0)) continue;
+    const dayHigh = Math.max(Number(q.regularMarketDayHigh) || 0, last);
     const dayLow = Number(q.regularMarketDayLow) || last;
-    const volume = Number(q.regularMarketVolume) || 0;
+    const volume =
+      (forPremarket ? Number(q.preMarketVolume) || 0 : 0) ||
+      Number(q.regularMarketVolume) ||
+      0;
     const row = quoteFromLastPrev(
       symbol,
       name,
@@ -601,7 +611,10 @@ async function fetchAfterHoursGainerQuotes(
 }
 
 /** Small spark fill-in for Most Advanced runners Yahoo day_gainers missed. */
-async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote>> {
+async function fetchYahooSpark(
+  symbols: string[],
+  forPremarket = false,
+): Promise<Map<string, LiveQuote>> {
   const uniq = [...new Set(symbols)].filter(Boolean).slice(0, 30);
   if (!uniq.length) return new Map();
 
@@ -638,9 +651,11 @@ async function fetchYahooSpark(symbols: string[]): Promise<Map<string, LiveQuote
     const meta = item.response?.[0]?.meta;
     if (!meta) continue;
     const symbol = String(item.symbol || meta.symbol || "").toUpperCase();
-    const last = Number(meta.regularMarketPrice) || 0;
     const prevClose = Number(meta.previousClose ?? meta.chartPreviousClose) || 0;
-    const dayHigh = Number(meta.regularMarketDayHigh) || last;
+    const pre = Number(meta.preMarketPrice) || 0;
+    const regular = Number(meta.regularMarketPrice) || 0;
+    const last = forPremarket && pre > 0 ? pre : regular;
+    const dayHigh = Math.max(Number(meta.regularMarketDayHigh) || 0, last);
     const dayLow = Number(meta.regularMarketDayLow) || last;
     const volume = Number(meta.regularMarketVolume) || 0;
     // Spark meta has no share count — Flt filled live below for ranked rows only.
@@ -887,7 +902,7 @@ export async function fetchLiveScannerClient(
   // Ranked board first — do not let Most Advanced discovery occupy the proxy
   // queue ahead of Yahoo day_gainers (Safari Load failed / slow first paint).
   const [yahooRes, polyRes] = await Promise.allSettled([
-    fetchYahooDayGainerQuotes(),
+    fetchYahooDayGainerQuotes(session === "premarket"),
     usePolygon ? fetchPolygonGainerQuotes(FEED_LIMIT) : Promise.resolve(null),
   ]);
 
@@ -940,7 +955,7 @@ export async function fetchLiveScannerClient(
   if (missing.length) {
     // Spark only — Flt summaries wait until after rank (fewer proxy hits).
     try {
-      const spark = await fetchYahooSpark(missing);
+      const spark = await fetchYahooSpark(missing, session === "premarket");
       for (const [sym, q] of spark) quotes.set(sym, q);
     } catch {
       /* ranked board still valid without spark fill */
