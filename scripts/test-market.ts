@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  currentTradingDayStartEt,
   etWallTimeToUtc,
   filterHodGainers,
   getMarketCountdown,
@@ -92,6 +93,63 @@ function testCountdownWeekendToMonday() {
   assert.match(cd.label, /^OPENS IN /);
 }
 
+
+/* ---------------------------------------------------------------- *
+ * Trading-day boundary — this is what clears all three boards.
+ * A trading day runs 04:00 ET → next 04:00 ET, weekends roll back to
+ * Friday so Friday's final boards persist through the weekend.
+ * ---------------------------------------------------------------- */
+
+function testTradingDayMidSession() {
+  // Wed Aug 5 2026, 11:00 ET — mid regular session.
+  const now = etWallTimeToUtc(2026, 8, 5, 11, 0, 0);
+  assert.equal(
+    currentTradingDayStartEt(now).getTime(),
+    etWallTimeToUtc(2026, 8, 5, 4, 0, 0).getTime(),
+  );
+}
+
+function testTradingDayAfterHoursStillToday() {
+  // Wed 20:30 ET — after-hours has ended but the day has not rolled.
+  const now = etWallTimeToUtc(2026, 8, 5, 20, 30, 0);
+  assert.equal(
+    currentTradingDayStartEt(now).getTime(),
+    etWallTimeToUtc(2026, 8, 5, 4, 0, 0).getTime(),
+  );
+}
+
+function testTradingDayBeforePremarketRollsBack() {
+  // Thu 03:59 ET — still Wednesday's trading day; boards must not have cleared.
+  const before = etWallTimeToUtc(2026, 8, 6, 3, 59, 0);
+  assert.equal(
+    currentTradingDayStartEt(before).getTime(),
+    etWallTimeToUtc(2026, 8, 5, 4, 0, 0).getTime(),
+  );
+  // Thu 04:00 ET — new premarket opens, boards clear.
+  const after = etWallTimeToUtc(2026, 8, 6, 4, 0, 0);
+  assert.equal(
+    currentTradingDayStartEt(after).getTime(),
+    etWallTimeToUtc(2026, 8, 6, 4, 0, 0).getTime(),
+  );
+}
+
+function testTradingDayWeekendHoldsFriday() {
+  // Fri Aug 7 2026 is a weekday; Sat/Sun must both resolve back to Friday 04:00.
+  const friday = etWallTimeToUtc(2026, 8, 7, 4, 0, 0);
+  for (const now of [
+    etWallTimeToUtc(2026, 8, 8, 12, 0, 0), // Saturday
+    etWallTimeToUtc(2026, 8, 9, 23, 0, 0), // Sunday night
+    etWallTimeToUtc(2026, 8, 10, 3, 30, 0), // Monday pre-04:00
+  ]) {
+    assert.equal(currentTradingDayStartEt(now).getTime(), friday.getTime());
+  }
+  // Monday 04:00 ET — new week's premarket, boards clear.
+  assert.equal(
+    currentTradingDayStartEt(etWallTimeToUtc(2026, 8, 10, 4, 0, 0)).getTime(),
+    etWallTimeToUtc(2026, 8, 10, 4, 0, 0).getTime(),
+  );
+}
+
 testTopGainersRanksByPct();
 testLoserRejected();
 testSessionHelper();
@@ -99,4 +157,8 @@ testCountdownDuringRegular();
 testCountdownNearClose();
 testCountdownPremarketOpens();
 testCountdownWeekendToMonday();
+testTradingDayMidSession();
+testTradingDayAfterHoursStillToday();
+testTradingDayBeforePremarketRollsBack();
+testTradingDayWeekendHoldsFriday();
 console.log("ok");

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getMarketCountdown } from "@/lib/market";
+import type { MarketSession } from "@/lib/types";
 import { hapticTap } from "@/lib/nativeUi";
 
 export type ScannerTab = "news" | "pre" | "mkt" | "ah";
@@ -77,6 +78,13 @@ function IconSpeaker({ muted }: { muted: boolean }) {
   );
 }
 
+const SESSION_LABEL: Record<MarketSession, string> = {
+  premarket: "PREMARKET",
+  regular: "OPEN",
+  afterhours: "AFTER HOURS",
+  closed: "CLOSED",
+};
+
 /** ET wall-clock for the status pill — same timezone the whole app reasons in. */
 function etClock(iso?: string | null): string {
   const d = iso ? new Date(iso) : new Date();
@@ -96,6 +104,7 @@ type Props = {
   connected: boolean;
   /** `updatedAt` from the last successful live poll — null while disconnected. */
   lastUpdated: string | null;
+  session: MarketSession;
   search: string;
   onSearchChange: (v: string) => void;
   onOpenMenu: () => void;
@@ -110,6 +119,7 @@ export function ScannerHeader({
   onTabChange,
   connected,
   lastUpdated,
+  session,
   search,
   onSearchChange,
   onOpenMenu,
@@ -154,21 +164,29 @@ export function ScannerHeader({
           </div>
 
           {/*
-            Restored LIVE / RECONNECTING indicator.
+            Two independent facts, two independent channels:
 
-            This was previously only a `title` tooltip, which meant the user's sole
-            signal that the feed had dropped was the red error strip. On a board where
-            a failed poll deliberately clears every row (ZERO CACHING), an explicit
-            connection state is safety-critical, not decoration.
+              colour    = feed health   (green = polls landing, red = RECONNECTING)
+              text      = market session (PREMARKET / OPEN / AFTER HOURS / CLOSED)
+              timestamp = proof of life (ticks every 3s even when prices do not)
+
+            Boards now stay populated after their session ends, so a frozen board is
+            normal. Without separating these, a green "LIVE" over final numbers is
+            indistinguishable from a hung poll — the exact confusion you do not want
+            on a trading screen at 9:29 AM.
           */}
           <span
             className={`rts-status ${connected ? "rts-status--live" : "rts-status--down"}`}
             role="status"
             aria-live="polite"
-            title={connected ? "Live feed connected" : "Reconnecting to live feed"}
+            title={
+              connected
+                ? `Feed connected — market ${SESSION_LABEL[session].toLowerCase()}`
+                : "Reconnecting to live feed"
+            }
           >
             <span className={`rts-status__dot${connected ? " live-dot" : ""}`} />
-            {connected ? "LIVE" : "RECONNECTING"}
+            {connected ? SESSION_LABEL[session] : "RECONNECTING"}
             {connected && <span className="rts-status__time">{etClock(lastUpdated)} ET</span>}
           </span>
 

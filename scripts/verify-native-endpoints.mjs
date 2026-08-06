@@ -355,6 +355,68 @@ if (!ranked.length) {
   }
 }
 
+/* 5 — session-field retention: does a finished board survive its session? */
+
+console.log("");
+console.log("5. Session-field retention (premarket / after-hours board persistence)");
+
+if (!dayGainersRaw) {
+  console.log(`  ${c.warn("SKIP")} no day_gainers payload to inspect`);
+} else {
+  const sample = dayGainersRaw.slice(0, 25);
+  const has = (f) => sample.filter((q) => Number(q[f]) > 0).length;
+
+  const preN = has("preMarketPrice");
+  const regN = has("regularMarketPrice");
+  const postN = has("postMarketPrice");
+
+  const fmtEt = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date(n < 1e12 ? n * 1000 : n));
+  };
+
+  const first = sample.find((q) => Number(q.regularMarketPrice) > 0) || {};
+  console.log(`       of ${sample.length} quotes:`);
+  console.log(`         preMarketPrice     ${preN}   e.g. ${first.symbol} @ ${fmtEt(first.preMarketTime)} ET`);
+  console.log(`         regularMarketPrice ${regN}   e.g. ${first.symbol} @ ${fmtEt(first.regularMarketTime)} ET`);
+  console.log(`         postMarketPrice    ${postN}   e.g. ${first.symbol} @ ${fmtEt(first.postMarketTime)} ET`);
+
+  // The assertion that matters, and it is session-dependent.
+  if (session === "regular") {
+    if (preN > 0) {
+      console.log(
+        `  ${c.ok("PASS")} preMarketPrice still present during regular hours — the Premarket board persists all day`,
+      );
+    } else {
+      failures += 1;
+      console.log(
+        `  ${c.bad("FAIL")} preMarketPrice is GONE during regular hours.\n` +
+          "       The Premarket tab will empty at 09:30. Holding it would require caching a\n" +
+          "       finished board, which STOCK_SCANNER_APP_MEMORY.md forbids — raise it, do not cache.",
+      );
+    }
+  } else if (session === "closed" || session === "afterhours") {
+    if (postN > 0) {
+      console.log(`  ${c.ok("PASS")} postMarketPrice present — the After Hours board persists past 20:00`);
+    } else {
+      console.log(
+        `  ${c.warn("WARN")} no postMarketPrice right now (normal before 16:00 or on a flat tape)`,
+      );
+      warnings += 1;
+    }
+  } else {
+    console.log(`  ${c.warn("SKIP")} run during regular hours (~11:00 ET) to test premarket retention`);
+  }
+}
+
 /* --------------------------------- verdict --------------------------------- */
 
 console.log("");

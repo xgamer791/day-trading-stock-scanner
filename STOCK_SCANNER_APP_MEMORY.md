@@ -201,6 +201,34 @@ detail lives in `docs/IOS.md`. **Every rule above still applies inside the iOS a
 - The Search / view-filter controls filter **already-live rows after ranking**. They never
   change what qualifies for the board; the only ranking filter is still top 50 by % gain.
 
+### Session boards persist for the trading day — this is NOT caching
+
+Added 2026-08-06. All three boards stay populated with their session's last top gainers
+after that session ends, and clear only at the **next 04:00 ET premarket open**.
+
+- Every 3s poll rebuilds **all three boards from the same fresh Yahoo payload**:
+  premarket `(preMarketPrice − regularMarketPrice)/regularMarketPrice`,
+  gainers `(regularMarketPrice − regularMarketPreviousClose)/regularMarketPreviousClose`,
+  after-hours `(postMarketPrice − regularMarketPrice)/regularMarketPrice`.
+  A finished board keeps rendering because **Yahoo keeps returning those fields**, not
+  because anything was stored. Nothing is cached; a failed poll still clears every row.
+- `currentTradingDayStartEt()` (`src/lib/market.ts`) is the clear boundary: 04:00 ET of the
+  most recent trading day, weekends rolling back to Friday. `sessionTimeOk()` in
+  `liveClient.ts` gates each board on its own `preMarketTime` / `regularMarketTime` /
+  `postMarketTime` falling inside that window — so yesterday's leftovers can never paint as
+  today's board. Covered by `scripts/test-market.ts`.
+- **Do not "fix" this by caching a completed board.** If Yahoo ever stops returning
+  `preMarketPrice` after the open, the Premarket tab empties at 09:30 — raise it with the
+  owner rather than persisting a board across polls. `npm run verify:native` section 5
+  checks exactly this and fails loudly.
+- The premarket board previously reused the regular-session ranking, whose % during
+  premarket is *yesterday's* move. `preMarketQuoteFromRaw()` is the correct math; never
+  rank Premarket off `regularMarketPrice` again.
+- Status pill separates two facts that used to share one signal: **colour = feed health**
+  (green/red), **text = session** (PREMARKET / OPEN / AFTER HOURS / CLOSED), **timestamp =
+  proof of life**. A green "LIVE" over a deliberately frozen board is indistinguishable
+  from a hung poll — keep them separate.
+
 ### Verifying the iOS build
 
 `npm run verify:native` is the gate — it proves direct no-proxy reachability, same-payload

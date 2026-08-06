@@ -93,6 +93,39 @@ export function nextRegularOpen(now = new Date()): Date {
   return openToday;
 }
 
+/** Premarket opens at 04:00 ET — the start of a trading day for this app. */
+export const PREMARKET_OPEN_HOUR = 4;
+
+/**
+ * Start of the current trading day: 04:00 ET of the most recent trading day.
+ *
+ * This is the boundary at which every board clears. A trading day runs from one
+ * premarket open to the next, so the day's premarket / regular / after-hours boards
+ * all stay on screen until the *next* premarket session begins.
+ *
+ * Before 04:00 ET the day hasn't started yet, so we roll back to the previous
+ * trading day. Weekends roll back to Friday, which is why Friday's final boards
+ * stay up all weekend rather than blanking on Saturday morning.
+ *
+ * Note this is a session boundary, not a data cache: it only decides whether a
+ * timestamp in a freshly-fetched payload belongs to today.
+ */
+export function currentTradingDayStartEt(now = new Date()): Date {
+  const p = getEtParts(now);
+
+  let cursor = { year: p.year, month: p.month, day: p.day, weekday: p.weekday };
+  // Before premarket opens, today's session hasn't begun — step back a day.
+  if (p.hour < PREMARKET_OPEN_HOUR) {
+    cursor = addEtCalendarDays(cursor.year, cursor.month, cursor.day, -1);
+  }
+  // Walk back to the most recent weekday (Sat/Sun → Friday).
+  for (let i = 0; i < 8 && isWeekend(cursor.weekday); i++) {
+    cursor = addEtCalendarDays(cursor.year, cursor.month, cursor.day, -1);
+  }
+
+  return etWallTimeToUtc(cursor.year, cursor.month, cursor.day, PREMARKET_OPEN_HOUR, 0, 0);
+}
+
 /** Today's regular close (16:00 ET), or null if not a weekday session day. */
 export function todaysRegularClose(now = new Date()): Date | null {
   const p = getEtParts(now);

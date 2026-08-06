@@ -24,6 +24,7 @@ import {
   hasClientPolygonKey,
 } from "@/lib/clientPolygonLive";
 import { fetchJsonDirect, fetchJsonViaCors } from "@/lib/corsTransport";
+import { currentTradingDayStartEt } from "@/lib/market";
 import type { NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 const FEED_LIMIT = 50;
@@ -243,6 +244,85 @@ async function fetchYahooDayGainerQuotes(): Promise<{
   return { map, raw: quotes };
 }
 
+/* ------------------------------------------------------------------ *
+ * Trading-day freshness
+ *
+ * Yahoo keeps `preMarketPrice` / `postMarketPrice` in the payload after their
+ * sessions end, which is what lets a finished board stay on screen without any
+ * caching on our side. But "still present" is not the same as "from today" —
+ * a stale field left over from a previous day must not be painted as this day's
+ * board. Every board is therefore gated on its own `*Time` stamp falling inside
+ * the current trading day (04:00 ET → next 04:00 ET, weekends roll back).
+ *
+ * This reads a timestamp out of a freshly-fetched payload. It is not a cache.
+ * ------------------------------------------------------------------ */
+
+/** Yahoo `*Time` fields are epoch seconds; tolerate ms and ISO strings too. */
+function quoteTimeMs(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "string") {
+    const parsed = Date.parse(v);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // < 1e12 means seconds, not milliseconds.
+  return n < 1e12 ? n * 1000 : n;
+}
+
+/**
+ * True when this quote's session timestamp belongs to the current trading day.
+ *
+ * Missing timestamp → treated as fresh. Yahoo omits `*Time` on some rows, and
+ * blanking an otherwise valid board because one field is absent is worse than
+ * showing it; the price fields themselves are still validated downstream.
+ */
+function sessionTimeOk(q: Record<string, unknown>, field: string): boolean {
+  const ms = quoteTimeMs(q[field]);
+  if (ms == null) return true;
+  return ms >= currentTradingDayStartEt().getTime();
+}
+
+/**
+ * Premarket top gainers: % from the prior regular close → preMarketPrice.
+ *
+ * Mirror of `afterHoursQuoteFromRaw`. In both windows `regularMarketPrice` is the
+ * most recent completed regular-session close, so it is the correct baseline:
+ * during premarket it is yesterday's close, during post-market it is today's.
+ *
+ * This is the board the Premarket tab should always have shown. It previously
+ * reused the regular-session ranking, whose % during premarket is yesterday's
+ * move, not this morning's.
+ */
+function preMarketQuoteFromRaw(q: Record<string, unknown>): LiveQuote | null {
+  const symbol = String(q.symbol || "")
+    .replace("/", "-")
+    .toUpperCase();
+  const name = String(q.shortName || q.longName || symbol);
+  if (!symbol || isJunk(symbol, name)) return null;
+  if (!sessionTimeOk(q, "preMarketTime")) return null;
+
+  const pre = Number(q.preMarketPrice) || 0;
+  const regular = Number(q.regularMarketPrice) || 0;
+  if (!(pre > 0) || !(regular > 0)) return null;
+
+  // Same-payload math — never Yahoo's own preMarketChangePercent field.
+  const changePct = ((pre - regular) / regular) * 100;
+  if (!(changePct > 0)) return null;
+
+  return {
+    symbol,
+    name,
+    last: pre,
+    prevClose: regular,
+    dayHigh: Math.max(regular, pre),
+    dayLow: Math.min(regular, pre),
+    volume: Number(q.preMarketVolume) || Number(q.regularMarketVolume) || 0,
+    changePct,
+    floatMillions: liveFloatMillions(q),
+  };
+}
+
 /**
  * After-hours top gainers: % from regular-session close → postMarketPrice.
  * NOT regular day_gainers ranking. Live Yahoo payloads only (STOCK_SCANNER_APP_MEMORY).
@@ -253,6 +333,8 @@ function afterHoursQuoteFromRaw(q: Record<string, unknown>): LiveQuote | null {
     .toUpperCase();
   const name = String(q.shortName || q.longName || symbol);
   if (!symbol || isJunk(symbol, name)) return null;
+
+  if (!sessionTimeOk(q, "postMarketTime")) return null;
 
   const post = Number(q.postMarketPrice) || 0;
   const regular = Number(q.regularMarketPrice) || 0;
@@ -279,15 +361,35 @@ function afterHoursQuoteFromRaw(q: Record<string, unknown>): LiveQuote | null {
   };
 }
 
-async function fetchAfterHoursGainerQuotes(
-  dayGainerRaw: Array<Record<string, unknown>>,
-): Promise<Map<string, LiveQuote>> {
-  // Broaden beyond day_gainers — AH winners are often flat/down on the day.
+/**
+ * Broaden beyond day_gainers.
+ *
+ * Premarket and after-hours winners are frequently flat or down on the regular
+ * session, so neither board can be built from day_gainers alone. Both need the
+ * same widened symbol set, so this is fetched **once per poll** and shared —
+ * three extra screener calls total, not three per board.
+ */
+async function fetchExtraScreenerRaw(): Promise<Array<Record<string, unknown>>> {
   const extraIds = ["most_actives", "day_losers", "small_cap_gainers"] as const;
   const extras = await Promise.allSettled(
     extraIds.map((id) => fetchYahooScreenerRaw(id, 100, 16000, "normal")),
   );
+  const out: Array<Record<string, unknown>> = [];
+  for (const res of extras) {
+    if (res.status === "fulfilled") out.push(...res.value);
+  }
+  return out;
+}
 
+/**
+ * Merge day_gainers with the widened set, preferring whichever quote actually
+ * carries a price for the session being built.
+ */
+function mergeRawBySession(
+  dayGainerRaw: Array<Record<string, unknown>>,
+  extraRaw: Array<Record<string, unknown>>,
+  priceField: "preMarketPrice" | "postMarketPrice",
+): Map<string, Record<string, unknown>> {
   const rawMap = new Map<string, Record<string, unknown>>();
   for (const q of dayGainerRaw) {
     const s = String(q.symbol || "")
@@ -295,23 +397,37 @@ async function fetchAfterHoursGainerQuotes(
       .toUpperCase();
     if (s) rawMap.set(s, q);
   }
-  for (const res of extras) {
-    if (res.status !== "fulfilled") continue;
-    for (const q of res.value) {
-      const s = String(q.symbol || "")
-        .replace("/", "-")
-        .toUpperCase();
-      if (!s) continue;
-      const prev = rawMap.get(s);
-      // Prefer the quote that carries a live postMarketPrice.
-      if (!prev || (Number(q.postMarketPrice) > 0 && !(Number(prev.postMarketPrice) > 0))) {
-        rawMap.set(s, q);
-      }
+  for (const q of extraRaw) {
+    const s = String(q.symbol || "")
+      .replace("/", "-")
+      .toUpperCase();
+    if (!s) continue;
+    const prev = rawMap.get(s);
+    if (!prev || (Number(q[priceField]) > 0 && !(Number(prev[priceField]) > 0))) {
+      rawMap.set(s, q);
     }
   }
+  return rawMap;
+}
 
+function buildPreMarketQuotes(
+  dayGainerRaw: Array<Record<string, unknown>>,
+  extraRaw: Array<Record<string, unknown>>,
+): Map<string, LiveQuote> {
   const map = new Map<string, LiveQuote>();
-  for (const q of rawMap.values()) {
+  for (const q of mergeRawBySession(dayGainerRaw, extraRaw, "preMarketPrice").values()) {
+    const row = preMarketQuoteFromRaw(q);
+    if (row) map.set(row.symbol, row);
+  }
+  return map;
+}
+
+function buildAfterHoursQuotes(
+  dayGainerRaw: Array<Record<string, unknown>>,
+  extraRaw: Array<Record<string, unknown>>,
+): Map<string, LiveQuote> {
+  const map = new Map<string, LiveQuote>();
+  for (const q of mergeRawBySession(dayGainerRaw, extraRaw, "postMarketPrice").values()) {
     const row = afterHoursQuoteFromRaw(q);
     if (row) map.set(row.symbol, row);
   }
@@ -521,24 +637,29 @@ function polygonToLiveQuotes(
   return map;
 }
 
+export type ScannerBoardId = "premarket" | "gainers" | "afterhours";
+
 export type LiveScanOptions = {
   /**
-   * Build the After Hours board this poll. Defaults to true for callers that do
-   * not care, but ScannerBoard passes `false` unless the AH tab is visible.
+   * Which boards are on screen this poll. Defaults to all three for callers that
+   * do not care; ScannerBoard passes just the visible tab.
    *
-   * This is NOT a cache — it simply does not fetch a board that is not on screen.
-   * Building AH costs 3 extra Yahoo screener calls plus up to 12 Nasdaq /summary
-   * calls per poll; running that every 3s behind the ranked board is the single
-   * largest source of proxy pressure during the 16:00–20:00 ET window.
+   * This is NOT a cache — it simply does not fetch a board nothing is displaying.
+   * Premarket and After Hours share one widened screener fetch, but that is still
+   * 3 extra Yahoo calls plus up to 12 Nasdaq /summary calls per poll on top of the
+   * ranked board; running those every 3s unconditionally is what caused the
+   * 2026-08-05 proxy starvation.
    */
-  includeAfterHours?: boolean;
+  boards?: ScannerBoardId[];
 };
 
 /** Live scan — no live.json, no floats.json, no last-tick paint. */
 export async function fetchLiveScannerClient(
   opts: LiveScanOptions = {},
 ): Promise<ScannerPayload> {
-  const { includeAfterHours = true } = opts;
+  const { boards = ["premarket", "gainers", "afterhours"] } = opts;
+  const wantPre = boards.includes("premarket");
+  const wantAh = boards.includes("afterhours");
   const session = sessionNow();
 
   let advanced: Seed[] = [];
@@ -631,26 +752,51 @@ export async function fetchLiveScannerClient(
     }
   }
 
-  // After Hours board — only during 16:00–20:00 ET. Ranked by post-market %
-  // vs regular close, not regular day_gainers %. Soft-fail (never kill Gainers).
+  /*
+   * Premarket + After Hours boards.
+   *
+   * Built whenever their tab is on screen and their data belongs to the current
+   * trading day — NOT only during their live window. Yahoo keeps preMarketPrice /
+   * postMarketPrice in the payload after the session ends, so a finished board keeps
+   * rendering from each fresh poll rather than from anything we stored. The
+   * per-row `sessionTimeOk` guard is what clears them at the next 04:00 ET premarket
+   * open. Both soft-fail: neither may ever kill the ranked Gainers board.
+   */
+  let premarketMovers: StockMover[] = [];
   let afterhoursMovers: StockMover[] = [];
-  if (session === "afterhours" && includeAfterHours) {
-    try {
-      const ahMap = await fetchAfterHoursGainerQuotes(dayGainerRaw);
-      afterhoursMovers = rankMovers(ahMap.values());
 
-      const ahNeed = afterhoursMovers
+  if (wantPre || wantAh) {
+    try {
+      // One widened fetch shared by both session boards.
+      const extraRaw = await fetchExtraScreenerRaw();
+
+      if (wantPre) {
+        premarketMovers = rankMovers(buildPreMarketQuotes(dayGainerRaw, extraRaw).values());
+      }
+      if (wantAh) {
+        afterhoursMovers = rankMovers(buildAfterHoursQuotes(dayGainerRaw, extraRaw).values());
+      }
+
+      // Flt enrichment for whichever session boards are on screen, under the
+      // existing shared wall-clock budget.
+      const sessionNeed = [...premarketMovers, ...afterhoursMovers]
         .filter((m) => m.floatMillions == null)
         .map((m) => m.symbol);
-      if (ahNeed.length) {
+      if (sessionNeed.length) {
         try {
-          const marketCaps = await fetchLiveMarketCaps(ahNeed);
-          afterhoursMovers = applyLiveFloatFromMcap(afterhoursMovers, marketCaps);
+          const marketCaps = await fetchLiveMarketCaps(sessionNeed);
+          if (premarketMovers.length) {
+            premarketMovers = applyLiveFloatFromMcap(premarketMovers, marketCaps);
+          }
+          if (afterhoursMovers.length) {
+            afterhoursMovers = applyLiveFloatFromMcap(afterhoursMovers, marketCaps);
+          }
         } catch {
           /* leave blank */
         }
       }
     } catch {
+      premarketMovers = [];
       afterhoursMovers = [];
     }
   }
@@ -663,16 +809,24 @@ export async function fetchLiveScannerClient(
   // gainers path does not burn proxies on multi-query news fetches.
   const news: NewsItem[] = [];
 
+  /*
+   * All three boards stay populated for the whole trading day.
+   *
+   * The Gainers board is gated on the regular session having actually happened
+   * today — before 09:30 the day_gainers % is still yesterday's move, and showing
+   * that as "today's gainers" was the old premarket bug in reverse.
+   */
+  const regularToday = dayGainerRaw.some((q) => sessionTimeOk(q, "regularMarketTime"));
+  const showGainers = session !== "premarket" && regularToday;
+
   return {
     session,
     updatedAt: new Date().toISOString(),
     source: sourceLabel,
     feedLimit: FEED_LIMIT,
     news,
-    // Premarket tab: live gaps/gainers during the premarket window only.
-    premarket: session === "premarket" ? movers : [],
-    // Gainers tab: regular-session day gainers (also visible into afterhours as the day's board).
-    gainers: session === "premarket" || session === "closed" ? [] : movers,
+    premarket: premarketMovers,
+    gainers: showGainers ? movers : [],
     afterhours: afterhoursMovers,
   };
 }

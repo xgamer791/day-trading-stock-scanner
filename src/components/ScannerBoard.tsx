@@ -24,7 +24,7 @@ import {
   type AppSettings,
 } from "@/lib/alerts";
 import { fetchLiveNewsFeed, fetchLiveNewsFeedQuick } from "@/lib/fetchLiveNewsFeed";
-import { fetchLiveScannerClient } from "@/lib/liveClient";
+import { fetchLiveScannerClient, type ScannerBoardId } from "@/lib/liveClient";
 import { getMarketSession } from "@/lib/market";
 import { isNativeApp } from "@/lib/nativeHttp";
 import { initNativeChrome, onAppStateChange, setHapticsEnabled, setKeepAwake } from "@/lib/nativeUi";
@@ -76,15 +76,22 @@ export function ScannerBoard() {
   const newsRef = useRef<NewsItem[]>([]);
   newsRef.current = news;
   /**
-   * Only build the After Hours board while that tab is on screen.
+   * Which boards to build this poll — only what is on screen.
    *
    * A ref (not a dep) so switching tabs does not tear down and restart the 3s
-   * poll interval. AH costs 3 extra Yahoo screener calls plus up to 12 Nasdaq
-   * /summary calls per poll — running it every 3s behind the ranked board is
-   * what saturates the public proxies during 16:00–20:00 ET.
+   * poll interval. The Gainers board is always built (it is the ranked board and
+   * the app's primary purpose). Premarket / After Hours add a shared widened
+   * screener fetch plus up to 12 Nasdaq /summary calls, so they are built only
+   * when their tab is visible — declining to fetch what nothing displays, which
+   * is what keeps the 3s ranked poll from starving.
    */
-  const ahTabRef = useRef(false);
-  ahTabRef.current = mobileTab === "ah";
+  const boardsRef = useRef<ScannerBoardId[]>(["gainers"]);
+  boardsRef.current =
+    mobileTab === "pre"
+      ? ["gainers", "premarket"]
+      : mobileTab === "ah"
+        ? ["gainers", "afterhours"]
+        : ["gainers"];
 
   /** Alert inputs, read inside the poll without making it a dep. */
   const rulesRef = useRef<AlertRule[]>([]);
@@ -129,9 +136,7 @@ export function ScannerBoard() {
       inFlight.current = true;
       try {
         // LIVE ONLY — never live.json / snapshot (STOCK_SCANNER_APP_MEMORY.md)
-        const live = await fetchLiveScannerClient({
-          includeAfterHours: ahTabRef.current,
-        });
+        const live = await fetchLiveScannerClient({ boards: boardsRef.current });
         if (cancelled || pausedRef.current) return;
 
         if (
@@ -299,6 +304,7 @@ export function ScannerBoard() {
         onTabChange={setMobileTab}
         connected={connected}
         lastUpdated={data?.updatedAt ?? null}
+        session={session}
         search={search}
         onSearchChange={setSearch}
         onOpenMenu={() => setMenuOpen(true)}
@@ -352,13 +358,21 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Premarket"
-            subtitle="Live top gainers / gaps — entire US market"
+            subtitle={
+              session === "premarket"
+                ? "Live premarket % vs prior close — entire US market"
+                : "Final — today's premarket session (4:00–9:30 AM ET)"
+            }
             count={filtered.premarket.length}
           />
           <PullToRefresh onRefresh={refreshNow}>
             <StockTable
               rows={filtered.premarket}
-              emptyText={emptyFor("No premarket gainers right now")}
+              emptyText={emptyFor(
+                session === "premarket"
+                  ? "Scanning premarket…"
+                  : "No premarket gainers today",
+              )}
             />
           </PullToRefresh>
         </section>
@@ -375,7 +389,9 @@ export function ScannerBoard() {
             subtitle={
               session === "premarket"
                 ? "Opens 9:30 AM ET — live open-market gainers"
-                : "Live top 50 % gainers — entire US market"
+                : session === "regular"
+                  ? "Live top 50 % gainers — entire US market"
+                  : "Final — today's regular session close"
             }
             count={filtered.gainers.length}
           />
@@ -383,11 +399,7 @@ export function ScannerBoard() {
             <StockTable
               rows={filtered.gainers}
               emptyText={emptyFor(
-                session === "premarket"
-                  ? "Market not open yet"
-                  : session === "closed"
-                    ? "Market closed"
-                    : "Scanning live…",
+                session === "premarket" ? "Market opens at 9:30 AM ET" : "Scanning live…",
               )}
             />
           </PullToRefresh>
@@ -399,7 +411,11 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="After Hours"
-            subtitle="Live post-market top % gainers vs regular close"
+            subtitle={
+              session === "afterhours"
+                ? "Live post-market % vs regular close"
+                : "Final — today's after-hours session (4:00–8:00 PM ET)"
+            }
             count={filtered.afterhours.length}
           />
           <PullToRefresh onRefresh={refreshNow}>
@@ -408,9 +424,9 @@ export function ScannerBoard() {
               emptyText={emptyFor(
                 session === "afterhours"
                   ? "Scanning after-hours…"
-                  : session === "closed"
-                    ? "After hours ended (4:00–8:00 PM ET)"
-                    : "After hours starts at 4:00 PM ET",
+                  : session === "premarket" || session === "regular"
+                    ? "After hours starts at 4:00 PM ET"
+                    : "No after-hours gainers today",
               )}
             />
           </PullToRefresh>
