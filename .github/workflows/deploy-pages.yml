@@ -5,8 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Refresh published snapshot every minute during US market hours (ET)
-    - cron: "*/1 8-21 * * 1-5"
+    # Snapshot refresh only (live feed is browser-polled, not live.json).
+    # Keep infrequent so deploy-pages is not starved by a permanent queue.
+    - cron: "0 * * * 1-5"
 
 permissions:
   contents: read
