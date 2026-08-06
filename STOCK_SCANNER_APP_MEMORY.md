@@ -45,8 +45,8 @@ This is non-negotiable. Violating it is a failed change.
 2. **FORBIDDEN as a source for live mover rows (price, %Chg, volume, Flt, HOD/OFF):**
    - `public/data/live.json` / Actions snapshot as the displayed live feed
    - `public/data/floats.json` / any fundamentals snapshot file for the Flt column
-   - In-memory “last good tick” / float maps reused across polls as if fresh (do not keep painting stale rows as LIVE after a failed poll — clear rows)
-   - LocalStorage / sessionStorage / IndexedDB for quotes, gainers, or float
+   - In-memory “last good tick” reused **during an active session** after a failed poll as if still LIVE (clear the live payload instead)
+   - LocalStorage / IndexedDB for quotes (sessionStorage is only allowed for prior-session board hold until next premarket — see Allowed)
    - Service worker caches for market data
    - CDN/`live.json` fallback when browser live fetch fails
    - Mixing a live last price with a stale % from another source
@@ -57,7 +57,8 @@ This is non-negotiable. Violating it is a failed change.
    - Sticky CORS **proxy preference** (transport only)
    - Static app shell (HTML/JS/CSS) on GitHub Pages — that is not the live feed
    - **Polygon.io snapshot gainers** as a live ranked board when Yahoo `day_gainers` CORS transport fails (direct browser CORS — not a cache). Still must recompute % from same payload last+prevClose.
-4. **On live fetch failure:** show RECONNECTING / error and **clear** mover rows. Do **not** substitute snapshot/cached gainers. Empty or error > wrong/stale numbers.
+   - **Prior-session board hold until next premarket:** after Premarket / Gainers / After Hours ends, keep showing that session’s last live board (in-memory + `sessionStorage` keyed by trading day via `sessionBoardHold.ts`) until the next weekday **4:00 AM ET premarket**. Cleared on premarket open. This is **not** a mid-session LIVE fallback when a poll fails during an active window.
+4. **On live fetch failure (active session):** show RECONNECTING / error and **clear** the live payload for that active window. Do **not** substitute snapshot/`live.json`. Prior-session holds outside the active window may still display until next premarket.
 5. **%Chg math (must match TradingView / Realtime):**  
    `(last − previousClose) / previousClose` from the **same quote payload**. Never pair Yahoo last with Nasdaq screener %.
 6. If GitHub Pages CORS forces a proxy: proxies are for transport only. They must still return **current** API payloads. A proxy is not a license to serve `live.json` or `floats.json`.
@@ -78,7 +79,8 @@ This is non-negotiable. Violating it is a failed change.
 - **Markets:** full US listed equities (NASDAQ, NYSE, AMEX/Arca, etc.).
 - **Junk filter OK:** warrants / units / rights / preferreds / leveraged ETFs (retail screener parity).
 - **Premarket tab ≠ Gainers tab ≠ After Hours tab** (session-aware).
-- **After Hours tab:** only 16:00–20:00 ET; ranked by live post-market % vs regular-session close — never paste regular `day_gainers` into this tab.
+- **After Hours tab:** post-market % vs regular-session close during 16:00–20:00 ET (and overnight live Yahoo postMarket* while `closed`) — never paste regular `day_gainers` into this tab.
+- **Prior-session hold:** Premarket / Gainers / After Hours keep their last session board after the window ends until next **4:00 AM ET premarket**, then clear.
 - **No demo / fake fallback data.**
 - Prefer GitHub Pages deploy; auto-deploy on changes and send the Pages link.
 

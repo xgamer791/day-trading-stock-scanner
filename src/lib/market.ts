@@ -149,6 +149,46 @@ export function getMarketSession(now = new Date()): MarketSession {
   return "closed";
 }
 
+/** ET calendar date key `YYYY-MM-DD`. */
+export function etDateKey(now = new Date()): string {
+  const p = getEtParts(now);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+/**
+ * Trading-day key for prior-session boards.
+ * Overnight closed (before 4:00 AM ET) and weekends map to the previous weekday.
+ * Boards clear when the next premarket window begins.
+ */
+export function sessionBoardTradingDayKey(now = new Date()): string {
+  const p = getEtParts(now);
+  const mins = p.hour * 60 + p.minute;
+
+  let year = p.year;
+  let month = p.month;
+  let day = p.day;
+  let weekday = p.weekday;
+
+  const rollBackOneDay = () => {
+    const utc = etWallTimeToUtc(year, month, day, 12, 0, 0);
+    utc.setUTCDate(utc.getUTCDate() - 1);
+    const q = getEtParts(utc);
+    year = q.year;
+    month = q.month;
+    day = q.day;
+    weekday = q.weekday;
+  };
+
+  if (isWeekend(weekday)) {
+    while (isWeekend(weekday)) rollBackOneDay();
+  } else if (mins < 4 * 60) {
+    rollBackOneDay();
+    while (isWeekend(weekday)) rollBackOneDay();
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 export function toMover(raw: {
   symbol: string;
   name?: string;

@@ -631,10 +631,14 @@ export async function fetchLiveScannerClient(
     }
   }
 
-  // After Hours board — only during 16:00–20:00 ET. Ranked by post-market %
-  // vs regular close, not regular day_gainers %. Soft-fail (never kill Gainers).
+  // After Hours board — during 16:00–20:00 ET and overnight closed until the
+  // next premarket (Yahoo still carries postMarket* on the prior session).
+  // Ranked by post-market % vs regular close, not regular day_gainers %.
+  // Soft-fail (never kill Gainers). Skipped when the AH tab is not visible.
   let afterhoursMovers: StockMover[] = [];
-  if (session === "afterhours" && includeAfterHours) {
+  const wantAfterHours =
+    includeAfterHours && (session === "afterhours" || session === "closed");
+  if (wantAfterHours) {
     try {
       const ahMap = await fetchAfterHoursGainerQuotes(dayGainerRaw);
       afterhoursMovers = rankMovers(ahMap.values());
@@ -670,9 +674,11 @@ export async function fetchLiveScannerClient(
     feedLimit: FEED_LIMIT,
     news,
     // Premarket tab: live gaps/gainers during the premarket window only.
+    // After 9:30 ET the UI holds the last premarket board until next 4:00 AM.
     premarket: session === "premarket" ? movers : [],
-    // Gainers tab: regular-session day gainers (also visible into afterhours as the day's board).
-    gainers: session === "premarket" || session === "closed" ? [] : movers,
+    // Gainers: regular + afterhours + overnight closed (prior session) until next premarket.
+    // Cleared for the premarket window so the new day starts clean.
+    gainers: session === "premarket" ? [] : movers,
     afterhours: afterhoursMovers,
   };
 }

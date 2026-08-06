@@ -6,10 +6,24 @@ import { ScannerHeader, type ScannerTab } from "@/components/ScannerHeader";
 import { fetchLiveNewsFeed, fetchLiveNewsFeedQuick } from "@/lib/fetchLiveNewsFeed";
 import { fetchLiveScannerClient } from "@/lib/liveClient";
 import { getMarketSession } from "@/lib/market";
-import type { MarketSession, NewsItem, ScannerPayload } from "@/lib/types";
+import {
+  clearHeldBoards,
+  readHeldBoard,
+  writeHeldBoard,
+} from "@/lib/sessionBoardHold";
+import type { MarketSession, NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 export function ScannerBoard() {
   const [data, setData] = useState<ScannerPayload | null>(null);
+  const [heldPremarket, setHeldPremarket] = useState<StockMover[]>(() =>
+    readHeldBoard("premarket"),
+  );
+  const [heldGainers, setHeldGainers] = useState<StockMover[]>(() =>
+    readHeldBoard("gainers"),
+  );
+  const [heldAfterhours, setHeldAfterhours] = useState<StockMover[]>(() =>
+    readHeldBoard("afterhours"),
+  );
   const [news, setNews] = useState<NewsItem[]>([]);
   const [newsLoading, setNewsLoading] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -21,6 +35,7 @@ export function ScannerBoard() {
   const newsInFlight = useRef(false);
   const newsRef = useRef<NewsItem[]>([]);
   newsRef.current = news;
+  const prevSessionRef = useRef<MarketSession>(clockSession);
   /**
    * Only build the After Hours board while that tab is on screen.
    *
@@ -36,6 +51,18 @@ export function ScannerBoard() {
     const id = setInterval(() => setClockSession(getMarketSession()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // New trading morning: wipe prior-session holds at premarket open (4:00 AM ET).
+  useEffect(() => {
+    const prev = prevSessionRef.current;
+    prevSessionRef.current = clockSession;
+    if (clockSession === "premarket" && prev !== "premarket") {
+      clearHeldBoards();
+      setHeldPremarket([]);
+      setHeldGainers([]);
+      setHeldAfterhours([]);
+    }
+  }, [clockSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +89,20 @@ export function ScannerBoard() {
         setData(live);
         setConnected(true);
         setError(null);
+
+        // Capture last non-empty boards for hold-until-next-premarket.
+        if (live.premarket.length) {
+          writeHeldBoard("premarket", live.premarket);
+          setHeldPremarket(live.premarket);
+        }
+        if (live.gainers.length) {
+          writeHeldBoard("gainers", live.gainers);
+          setHeldGainers(live.gainers);
+        }
+        if (live.afterhours.length) {
+          writeHeldBoard("afterhours", live.afterhours);
+          setHeldAfterhours(live.afterhours);
+        }
       } catch (err) {
         if (cancelled) return;
         setConnected(false);
@@ -72,7 +113,8 @@ export function ScannerBoard() {
             ? "Live feed reconnecting (quote transport)…"
             : raw;
         setError(msg);
-        // STOCK_SCANNER_APP_MEMORY: on failure show RECONNECTING/error — do NOT paint stale last-tick rows.
+        // Active-session poll failure: clear LIVE payload. Prior-session holds
+        // (Premarket/Gainers/AH after that window ends) stay in held* state.
         setData(null);
       } finally {
         inFlight.current = false;
@@ -138,6 +180,38 @@ export function ScannerBoard() {
 
   const session = data?.session ?? clockSession;
 
+  // Active session windows: live rows only (no hold fallback on poll failure).
+  // After that window ends: keep last board until next premarket (4:00 AM ET).
+  const premarketRows =
+    session === "premarket"
+      ? (data?.premarket ?? [])
+      : data?.premarket?.length
+        ? data.premarket
+        : heldPremarket;
+
+  const gainersRows =
+    session === "premarket"
+      ? []
+      : session === "regular" || session === "afterhours"
+        ? (data?.gainers ?? [])
+        : data?.gainers?.length
+          ? data.gainers
+          : heldGainers;
+
+  const afterhoursRows =
+    session === "afterhours"
+      ? (data?.afterhours ?? [])
+      : session === "closed"
+        ? data?.afterhours?.length
+          ? data.afterhours
+          : heldAfterhours
+        : [];
+
+  const premarketHolding = session !== "premarket" && premarketRows.length > 0;
+  const gainersHolding = session === "closed" && gainersRows.length > 0;
+  const afterhoursHolding =
+    session === "closed" && afterhoursRows.length > 0 && !(data?.afterhours?.length);
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <ScannerHeader
@@ -146,7 +220,7 @@ export function ScannerBoard() {
         connected={connected}
       />
 
-      {error && (
+      {error && !premarketRows.length && !gainersRows.length && !afterhoursRows.length && (
         <div
           style={{
             padding: "10px 16px",
@@ -190,12 +264,22 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="Premarket"
-            subtitle="Live top gainers / gaps — entire US market"
-            count={data?.premarket.length ?? 0}
+            subtitle={
+              premarketHolding
+                ? "Last premarket session — clears at next 4:00 AM ET"
+                : "Live top gainers / gaps — entire US market"
+            }
+            count={premarketRows.length}
           />
           <StockTable
-            rows={data?.premarket ?? []}
-            emptyText={error ? "Live data error" : "No premarket gainers right now"}
+            rows={premarketRows}
+            emptyText={
+              error && !premarketRows.length
+                ? "Live data error"
+                : session === "premarket"
+                  ? "Scanning premarket…"
+                  : "No premarket board yet (fills 4:00–9:30 AM ET)"
+            }
           />
         </section>
 
@@ -211,20 +295,20 @@ export function ScannerBoard() {
             subtitle={
               session === "premarket"
                 ? "Opens 9:30 AM ET — live open-market gainers"
-                : "Live top 50 % gainers — entire US market"
+                : gainersHolding
+                  ? "Last regular session — clears at next 4:00 AM ET"
+                  : "Live top 50 % gainers — entire US market"
             }
-            count={data?.gainers.length ?? 0}
+            count={gainersRows.length}
           />
           <StockTable
-            rows={data?.gainers ?? []}
+            rows={gainersRows}
             emptyText={
-              error
+              error && !gainersRows.length
                 ? "Live data error"
                 : session === "premarket"
                   ? "Market not open yet"
-                  : session === "closed"
-                    ? "Market closed"
-                    : "Scanning live…"
+                  : "Scanning live…"
             }
           />
         </section>
@@ -235,19 +319,25 @@ export function ScannerBoard() {
         >
           <PanelHeader
             title="After Hours"
-            subtitle="Live post-market top % gainers vs regular close"
-            count={data?.afterhours.length ?? 0}
+            subtitle={
+              afterhoursHolding
+                ? "Last after-hours session — clears at next 4:00 AM ET"
+                : "Live post-market top % gainers vs regular close"
+            }
+            count={afterhoursRows.length}
           />
           <StockTable
-            rows={data?.afterhours ?? []}
+            rows={afterhoursRows}
             emptyText={
-              error
+              error && !afterhoursRows.length
                 ? "Live data error"
                 : session === "afterhours"
                   ? "Scanning after-hours…"
                   : session === "closed"
-                    ? "After hours ended (4:00–8:00 PM ET)"
-                    : "After hours starts at 4:00 PM ET"
+                    ? "No after-hours board yet"
+                    : session === "premarket"
+                      ? "Clears at premarket — next session 4:00 PM ET"
+                      : "After hours starts at 4:00 PM ET"
             }
           />
         </section>
