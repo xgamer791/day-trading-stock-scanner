@@ -72,6 +72,27 @@ export function ScannerBoard() {
   heldGainersRef.current = heldGainers;
   heldAfterhoursRef.current = heldAfterhours;
 
+  // Static export SSR cannot read sessionStorage — useState(() => readHeldBoard())
+  // baked [] into the hydrated client. Re-read on mount so Premarket/Gainers/AH
+  // prior-session boards survive refresh during RTH / closed (until next 4am ET).
+  useEffect(() => {
+    const pm = readHeldBoard("premarket");
+    const g = readHeldBoard("gainers");
+    const ah = readHeldBoard("afterhours");
+    if (pm.length) {
+      heldPremarketRef.current = pm;
+      setHeldPremarket(pm);
+    }
+    if (g.length) {
+      heldGainersRef.current = g;
+      setHeldGainers(g);
+    }
+    if (ah.length) {
+      heldAfterhoursRef.current = ah;
+      setHeldAfterhours(ah);
+    }
+  }, []);
+
   useEffect(() => {
     const id = setInterval(() => setClockSession(getMarketSession()), 1000);
     return () => clearInterval(id);
@@ -87,6 +108,9 @@ export function ScannerBoard() {
     clearedForPremarketRef.current = true;
 
     clearHeldBoards();
+    heldPremarketRef.current = [];
+    heldGainersRef.current = [];
+    heldAfterhoursRef.current = [];
     setHeldPremarket([]);
     setHeldGainers([]);
     setHeldAfterhours([]);
@@ -204,16 +228,14 @@ export function ScannerBoard() {
             ? "Live feed reconnecting (quote transport)…"
             : raw;
         setError(msg);
-        // Keep last strong same-session board on screen (identity stability).
-        // Do NOT setData(null) when we have held rows — that caused the
-        // correct → empty error → wrong list flash. Not live.json / snapshot.
-        const nowSession = getMarketSession();
+        // Keep ANY prior-session / same-session strong hold on screen.
+        // During RTH Premarket is hold-only (live returns premarket:[]) — a
+        // Gainers transport miss must not setData(null) and wipe that board.
+        // Not live.json / snapshot.
         const hasHold =
-          (nowSession === "premarket" && heldPremarketRef.current.length > 0) ||
-          ((nowSession === "regular" || nowSession === "afterhours") &&
-            heldGainersRef.current.length > 0) ||
-          ((nowSession === "afterhours" || nowSession === "closed") &&
-            (heldAfterhoursRef.current.length > 0 || heldGainersRef.current.length > 0));
+          heldPremarketRef.current.length > 0 ||
+          heldGainersRef.current.length > 0 ||
+          heldAfterhoursRef.current.length > 0;
         if (!hasHold) {
           setData(null);
         }
@@ -378,11 +400,11 @@ export function ScannerBoard() {
           <StockTable
             rows={premarketRows}
             emptyText={
-              error && !premarketRows.length
-                ? "Live data error"
-                : session === "premarket"
-                  ? "Scanning premarket…"
-                  : "No premarket board yet (fills 4:00–9:30 AM ET)"
+              session === "premarket"
+                ? error && !premarketRows.length
+                  ? "Live data error"
+                  : "Scanning premarket…"
+                : "No premarket board yet (fills 4:00–9:30 AM ET)"
             }
           />
         </section>

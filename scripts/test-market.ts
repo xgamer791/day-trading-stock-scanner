@@ -110,6 +110,16 @@ function testSessionBoardDayKeyRollsAtPremarket() {
   assert.equal(sessionBoardTradingDayKey(regular), "2026-08-03");
 }
 
+/** RTH hold key must match the morning premarket write key (same calendar day). */
+function testPremarketHoldKeySurvivesRegularSession() {
+  const pre = etWallTimeToUtc(2026, 8, 6, 8, 0, 0);
+  const rth = etWallTimeToUtc(2026, 8, 6, 11, 0, 0);
+  assert.equal(getMarketSession(pre), "premarket");
+  assert.equal(getMarketSession(rth), "regular");
+  assert.equal(sessionBoardTradingDayKey(pre), sessionBoardTradingDayKey(rth));
+  assert.equal(sessionBoardTradingDayKey(rth), "2026-08-06");
+}
+
 testTopGainersRanksByPct();
 testLoserRejected();
 testSessionHelper();
@@ -118,4 +128,5 @@ testCountdownNearClose();
 testCountdownPremarketOpens();
 testCountdownWeekendToMonday();
 testSessionBoardDayKeyRollsAtPremarket();
+testPremarketHoldKeySurvivesRegularSession();
 console.log("ok");

@@ -87,6 +87,17 @@ This is non-negotiable. Violating it is a failed change.
 
 **Do not reintroduce:** throwing `Live premarket quotes unavailable` on empty, `setData(null)` while a strong same-session hold exists, or unbounded Premarket chart storms.
 
+### Hold durability after 9:30 ET (fixed again 2026-08-06 afternoon)
+
+**Symptom:** Premarket tab empty with “Live data error” / reconnecting during RTH even after a good morning board.
+
+**Root causes (both required):**
+1. Static export SSR: `useState(() => readHeldBoard())` runs with no `sessionStorage` → `[]`, and React never re-ran the initializer on the client — **must rehydrate holds in a mount `useEffect`**.
+2. Poll `catch` `hasHold` only counted Premarket during `premarket` session — during `regular`, a Gainers transport miss called `setData(null)` even when `heldPremarket` existed. During RTH, live returns `premarket: []` by design; **Premarket is hold-only after 9:30** — any hold must block `setData(null)`.
+3. Premarket `emptyText` must not show “Live data error” outside the premarket window (Gainers reconnect is not a Premarket board failure).
+
+**Do not reintroduce:** session-narrow `hasHold`, or relying on `useState(readHeldBoard)` alone under `output: "export"`.
+
 ---
 
 ## Product rules
