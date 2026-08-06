@@ -5,11 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # Refresh published snapshot every minute during US market hours (ET)
-    - cron: "*/1 8-21 * * 1-5"
+    # Snapshot refresh only (live feed is browser-polled, not live.json).
+    - cron: "0 * * * 1-5"
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +31,7 @@ jobs:
       - run: npm ci
       - name: Fetch live Yahoo market data
         run: npm run fetch:live
+        continue-on-error: true
       - run: npm run build
         env:
           GITHUB_PAGES: "true"
@@ -38,16 +39,12 @@ jobs:
           NEXT_PUBLIC_QUOTE_PROXY_URL: ${{ secrets.QUOTE_PROXY_URL }}
       - name: Ensure .nojekyll
         run: touch out/.nojekyll
-      - uses: actions/upload-pages-artifact@v3
+      # deploy-pages was stuck in deployment_queued (10m timeouts).
+      # Publish the static export straight to the gh-pages branch instead.
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: out
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./out
+          force_orphan: true
+          enable_jekyll: false
