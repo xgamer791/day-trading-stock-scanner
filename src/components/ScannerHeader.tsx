@@ -98,6 +98,7 @@ type Props = {
   lastUpdated: string | null;
   search: string;
   onSearchChange: (v: string) => void;
+  onOpenMenu: () => void;
   onOpenSettings: () => void;
   soundOn: boolean;
   onToggleSound: () => void;
@@ -111,6 +112,7 @@ export function ScannerHeader({
   lastUpdated,
   search,
   onSearchChange,
+  onOpenMenu,
   onOpenSettings,
   soundOn,
   onToggleSound,
@@ -140,7 +142,7 @@ export function ScannerHeader({
           aria-label="Menu"
           onClick={() => {
             void hapticTap();
-            onOpenSettings();
+            onOpenMenu();
           }}
         >
           <IconMenu />

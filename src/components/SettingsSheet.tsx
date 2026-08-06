@@ -86,34 +86,36 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
   );
 }
 
+/**
+ * Fixed-width numeric field.
+ *
+ * No trailing unit glyph: a per-row suffix span made the inputs sit at different
+ * x-positions depending on whether that row had one, which read as a stagger.
+ * Units live in the row label instead, so all four boxes align on a single edge.
+ */
 function NumField({
   value,
   onChange,
-  placeholder,
-  suffix,
+  placeholder = "—",
 }: {
   value: number | null;
   onChange: (v: number | null) => void;
-  placeholder: string;
-  suffix?: string;
+  placeholder?: string;
 }) {
   return (
-    <span className="sheet__numwrap">
-      <input
-        className="sheet__num"
-        type="number"
-        inputMode="decimal"
-        placeholder={placeholder}
-        value={value ?? ""}
-        onChange={(e) => {
-          const raw = e.target.value.trim();
-          if (!raw) return onChange(null);
-          const n = Number(raw);
-          onChange(Number.isFinite(n) ? n : null);
-        }}
-      />
-      {suffix && <span className="sheet__numsuffix">{suffix}</span>}
-    </span>
+    <input
+      className="sheet__num"
+      type="number"
+      inputMode="decimal"
+      placeholder={placeholder}
+      value={value ?? ""}
+      onChange={(e) => {
+        const raw = e.target.value.trim();
+        if (!raw) return onChange(null);
+        const n = Number(raw);
+        onChange(Number.isFinite(n) ? n : null);
+      }}
+    />
   );
 }
 
@@ -261,35 +263,28 @@ export function SettingsSheet({
             Display-only. Ranking is always top&nbsp;50 by&nbsp;% gain across the whole US
             market — these hide rows after ranking, they never change what qualifies.
           </p>
-          <Row label="Min price">
+          <Row label="Min price ($)">
             <NumField
               value={viewFilter.minPrice}
               onChange={(v) => onViewFilterChange({ ...viewFilter, minPrice: v })}
-              placeholder="—"
-              suffix="$"
             />
           </Row>
-          <Row label="Max price">
+          <Row label="Max price ($)">
             <NumField
               value={viewFilter.maxPrice}
               onChange={(v) => onViewFilterChange({ ...viewFilter, maxPrice: v })}
-              placeholder="—"
-              suffix="$"
             />
           </Row>
           <Row label="Min volume">
             <NumField
               value={viewFilter.minVolume}
               onChange={(v) => onViewFilterChange({ ...viewFilter, minVolume: v })}
-              placeholder="—"
             />
           </Row>
-          <Row label="Max float">
+          <Row label="Max float (M)">
             <NumField
               value={viewFilter.maxFloatMillions}
               onChange={(v) => onViewFilterChange({ ...viewFilter, maxFloatMillions: v })}
-              placeholder="—"
-              suffix="M"
             />
           </Row>
           {viewFilterActive(viewFilter) && (

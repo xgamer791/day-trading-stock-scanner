@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { NewsFeed, PanelHeader, StockTable } from "@/components/Panels";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ScannerHeader, type ScannerTab } from "@/components/ScannerHeader";
+import { SideMenu } from "@/components/SideMenu";
 import {
   EMPTY_VIEW_FILTER,
   SettingsSheet,
@@ -66,6 +67,7 @@ export function ScannerBoard() {
   const [search, setSearch] = useState("");
   const [viewFilter, setViewFilter] = useState<ViewFilter>(EMPTY_VIEW_FILTER);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [rules, setRules] = useState<AlertRule[]>([]);
 
@@ -299,6 +301,7 @@ export function ScannerBoard() {
         lastUpdated={data?.updatedAt ?? null}
         search={search}
         onSearchChange={setSearch}
+        onOpenMenu={() => setMenuOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
         soundOn={settings.soundEnabled}
         onToggleSound={() => persistSettings({ ...settings, soundEnabled: !settings.soundEnabled })}
@@ -417,6 +420,22 @@ export function ScannerBoard() {
       <TabBar
         activeTab={mobileTab}
         onTabChange={setMobileTab}
+        counts={{
+          news: news.length,
+          pre: filtered.premarket.length,
+          mkt: filtered.gainers.length,
+          ah: filtered.afterhours.length,
+        }}
+      />
+
+      <SideMenu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        activeTab={mobileTab}
+        onTabChange={setMobileTab}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onRefresh={refreshNow}
+        connected={connected}
         counts={{
           news: news.length,
           pre: filtered.premarket.length,
