@@ -13,9 +13,11 @@ permissions:
   pages: write
   id-token: write
 
+# cancel-in-progress:false — minute cron + cancel was leaving deploy-pages
+# stuck in deployment_queued until timeout (gear removal never reached live).
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
