@@ -16,8 +16,8 @@ import {
 import type { MarketSession, NewsItem, ScannerPayload, StockMover } from "@/lib/types";
 
 /**
- * Prefer the stronger board so a weak Yahoo-only poll cannot flip the UI off
- * a Realtime-parity Most-Advanced-enriched list (YXT-class runners).
+ * Prefer the stronger board so a weak/partial poll cannot flip the UI off a
+ * Realtime-parity list (Premarket CLRO-class, Gainers YXT-class, AH micros).
  */
 function preferStrongerBoard(
   live: StockMover[] | undefined,
@@ -64,14 +64,20 @@ export function ScannerBoard() {
   const ahTabRef = useRef(false);
   ahTabRef.current = mobileTab === "ah";
 
+  // Refs so poll catch can see latest held boards without stale closures.
+  const heldPremarketRef = useRef(heldPremarket);
+  const heldGainersRef = useRef(heldGainers);
+  const heldAfterhoursRef = useRef(heldAfterhours);
+  heldPremarketRef.current = heldPremarket;
+  heldGainersRef.current = heldGainers;
+  heldAfterhoursRef.current = heldAfterhours;
+
   useEffect(() => {
     const id = setInterval(() => setClockSession(getMarketSession()), 1000);
     return () => clearInterval(id);
   }, []);
 
   // New trading morning: wipe PRIOR-DAY holds at premarket open (4:00 AM ET).
-  // Clock already hides Gainers/AH. Do NOT null the live payload forever —
-  // strip overnight rows, then let the 3s poll populate Premarket with live data.
   useEffect(() => {
     if (clockSession !== "premarket") {
       clearedForPremarketRef.current = false;
@@ -86,7 +92,6 @@ export function ScannerBoard() {
     setHeldAfterhours([]);
     setData((prev) => {
       if (!prev) return null;
-      // Drop yesterday's boards; next live poll fills `premarket`.
       return {
         ...prev,
         session: "premarket",
@@ -120,10 +125,6 @@ export function ScannerBoard() {
         }
 
         const nowSession = getMarketSession();
-        // If a poll started overnight and finished after 4:00 AM ET, strip
-        // Gainers/AH so we never re-seed cleared boards from a stale payload.
-        // Always keep `live.premarket` when the clock is in premarket so we
-        // populate the Premarket tab with new live rows (not an empty board).
         const payload =
           nowSession === "premarket"
             ? {
@@ -135,56 +136,87 @@ export function ScannerBoard() {
               }
             : live;
 
-        setData(payload);
+        // Empty successful payload (Premarket soft-miss): reconnect signal but
+        // do not wipe a strong same-session board / flip to a weak identity.
+        const emptyLive =
+          !payload.premarket.length &&
+          !payload.gainers.length &&
+          !payload.afterhours.length;
+        if (emptyLive) {
+          setConnected(false);
+          setError("Live feed reconnecting (quote transport)…");
+          return;
+        }
+
+        // Quality-gate every session board — weak/partial polls must not
+        // overwrite a strong same-session hold (Premarket CLRO ↔ soft list cycle).
+        let nextPremarket = heldPremarketRef.current;
+        let nextGainers = heldGainersRef.current;
+        let nextAfterhours = heldAfterhoursRef.current;
+
+        if (payload.premarket.length) {
+          if (shouldReplaceHeldBoard(payload.premarket, nextPremarket)) {
+            writeHeldBoard("premarket", payload.premarket);
+            nextPremarket = payload.premarket;
+            setHeldPremarket(payload.premarket);
+          }
+        }
+        if (nowSession !== "premarket" && payload.gainers.length) {
+          if (shouldReplaceHeldBoard(payload.gainers, nextGainers)) {
+            writeHeldBoard("gainers", payload.gainers);
+            nextGainers = payload.gainers;
+            setHeldGainers(payload.gainers);
+          }
+        }
+        if (
+          (nowSession === "afterhours" || nowSession === "closed") &&
+          payload.afterhours.length
+        ) {
+          if (shouldReplaceHeldBoard(payload.afterhours, nextAfterhours)) {
+            writeHeldBoard("afterhours", payload.afterhours);
+            nextAfterhours = payload.afterhours;
+            setHeldAfterhours(payload.afterhours);
+          }
+        }
+
+        // Paint quality-gated rows into `data` so a weak live array never
+        // briefly flashes before preferStrongerBoard on the next render.
+        setData({
+          ...payload,
+          premarket: preferStrongerBoard(payload.premarket, nextPremarket),
+          gainers:
+            nowSession === "premarket"
+              ? []
+              : preferStrongerBoard(payload.gainers, nextGainers),
+          afterhours:
+            nowSession === "premarket" || nowSession === "regular"
+              ? []
+              : preferStrongerBoard(payload.afterhours, nextAfterhours),
+        });
         setConnected(true);
         setError(null);
-
-        // Capture boards for hold-until-next-premarket — never let a weak
-        // day_gainers-only poll overwrite a strong Most-Advanced-enriched hold
-        // (that is what caused the ~20s correct↔incorrect Gainers rotation).
-        // During premarket: always accept the live gap board (do not let
-        // yesterday's YXT-class hold quality-gate today's CLRO-class gaps).
-        if (payload.premarket.length) {
-          if (nowSession === "premarket") {
-            writeHeldBoard("premarket", payload.premarket);
-            setHeldPremarket(payload.premarket);
-          } else {
-            setHeldPremarket((prev) => {
-              if (!shouldReplaceHeldBoard(payload.premarket, prev)) return prev;
-              writeHeldBoard("premarket", payload.premarket);
-              return payload.premarket;
-            });
-          }
-        }
-        if (nowSession !== "premarket") {
-          if (payload.gainers.length) {
-            setHeldGainers((prev) => {
-              if (!shouldReplaceHeldBoard(payload.gainers, prev)) return prev;
-              writeHeldBoard("gainers", payload.gainers);
-              return payload.gainers;
-            });
-          }
-          if (payload.afterhours.length) {
-            setHeldAfterhours((prev) => {
-              if (!shouldReplaceHeldBoard(payload.afterhours, prev)) return prev;
-              writeHeldBoard("afterhours", payload.afterhours);
-              return payload.afterhours;
-            });
-          }
-        }
       } catch (err) {
         if (cancelled) return;
         setConnected(false);
         const raw = err instanceof Error ? err.message : "Failed to load live data";
-        // Safari often surfaces opaque TypeError "Load failed" for proxy/CORS failures.
         const msg =
-          /load failed|failed to fetch|networkerror|aborted/i.test(raw)
+          /load failed|failed to fetch|networkerror|aborted|unavailable/i.test(raw)
             ? "Live feed reconnecting (quote transport)…"
             : raw;
         setError(msg);
-        // Active-session poll failure: clear LIVE payload. Prior-session holds
-        // (Premarket/Gainers/AH after that window ends) stay in held* state.
-        setData(null);
+        // Keep last strong same-session board on screen (identity stability).
+        // Do NOT setData(null) when we have held rows — that caused the
+        // correct → empty error → wrong list flash. Not live.json / snapshot.
+        const nowSession = getMarketSession();
+        const hasHold =
+          (nowSession === "premarket" && heldPremarketRef.current.length > 0) ||
+          ((nowSession === "regular" || nowSession === "afterhours") &&
+            heldGainersRef.current.length > 0) ||
+          ((nowSession === "afterhours" || nowSession === "closed") &&
+            (heldAfterhoursRef.current.length > 0 || heldGainersRef.current.length > 0));
+        if (!hasHold) {
+          setData(null);
+        }
       } finally {
         inFlight.current = false;
       }
@@ -209,7 +241,6 @@ export function ScannerBoard() {
       if (empty) setNewsLoading(true);
 
       try {
-        // Phase 1 — fast sources so we never stick on Loading…
         try {
           const quick = await fetchLiveNewsFeedQuick();
           if (cancelled) return;
@@ -222,7 +253,6 @@ export function ScannerBoard() {
           /* fall through to full scan */
         }
 
-        // Phase 2 — all registered sources (hard deadline inside fetchLiveNews)
         const full = await fetchLiveNewsFeed();
         if (cancelled) return;
         setNews(full);
@@ -247,43 +277,30 @@ export function ScannerBoard() {
     };
   }, []);
 
-  // Clock gates which boards are active. Never trust a stale poll `session`
-  // label past 4:00 AM ET — that left overnight Gainers/AH on screen.
   const session = clockSession;
 
-  // Active session: quality-gate successful polls (weak day_gainers-only must not
-  // flip off a strong Most-Advanced merge). Failed poll clears LIVE (`data` null)
-  // — do not paint held as LIVE during an active window (APP_MEMORY).
-  // Closed: keep last strong board until next premarket (4:00 AM ET).
-  // Premarket open: prior-day holds wiped above; Premarket tab then fills from
-  // live polls (data.premarket). Gainers/AH stay empty until their windows.
+  // All sessions: quality-gate live vs held so partial/failed polls cannot
+  // change board identity. Failed poll may clear `data` only when no hold.
   const premarketRows =
     session === "premarket"
-      ? (data?.premarket ?? [])
+      ? preferStrongerBoard(data?.premarket, heldPremarket)
       : preferStrongerBoard(data?.premarket, heldPremarket);
 
   const gainersRows =
     session === "premarket"
       ? []
-      : session === "regular" || session === "afterhours"
-        ? data
-          ? preferStrongerBoard(data.gainers, heldGainers)
-          : []
-        : preferStrongerBoard(data?.gainers, heldGainers);
+      : preferStrongerBoard(data?.gainers, heldGainers);
 
   const afterhoursRows =
     session === "premarket" || session === "regular"
       ? []
-      : session === "afterhours"
-        ? data
-          ? preferStrongerBoard(data.afterhours, heldAfterhours)
-          : []
-        : preferStrongerBoard(data?.afterhours, heldAfterhours);
+      : preferStrongerBoard(data?.afterhours, heldAfterhours);
 
   const premarketHolding = session !== "premarket" && premarketRows.length > 0;
   const gainersHolding = session === "closed" && gainersRows.length > 0;
-  const afterhoursHolding =
-    session === "closed" && afterhoursRows.length > 0;
+  const afterhoursHolding = session === "closed" && afterhoursRows.length > 0;
+  const reconnectingWithBoard =
+    !!error && (premarketRows.length > 0 || gainersRows.length > 0 || afterhoursRows.length > 0);
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -305,6 +322,20 @@ export function ScannerBoard() {
           }}
         >
           Live data error: {error}
+        </div>
+      )}
+      {reconnectingWithBoard && (
+        <div
+          style={{
+            padding: "8px 16px",
+            background: "var(--bg-panel)",
+            color: "var(--text-dim)",
+            fontSize: 12,
+            fontWeight: 600,
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          {error}
         </div>
       )}
 

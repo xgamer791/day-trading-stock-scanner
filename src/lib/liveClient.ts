@@ -497,10 +497,10 @@ async function fetchNasdaqDiscoverySymbols(): Promise<string[]> {
   }
 }
 
-const AH_CHART_MAX = 48;
-const AH_CHART_CONCURRENCY = 6;
-const AH_CHART_BUDGET_MS = 14_000;
-const AH_UNIVERSE_SLICE = 40;
+const AH_CHART_MAX = 32;
+const AH_CHART_CONCURRENCY = 4;
+const AH_CHART_BUDGET_MS = 12_000;
+const AH_UNIVERSE_SLICE = 24;
 
 /**
  * Wide AH discovery: Yahoo screeners (postMarket*) + Nasdaq movers + sticky hits
@@ -567,7 +567,7 @@ async function fetchAfterHoursGainerQuotes(
   }
 
   const firstWave = ahHotSymbols.size < 8;
-  const chartMax = firstWave ? 64 : AH_CHART_MAX;
+  const chartMax = firstWave ? 40 : AH_CHART_MAX;
 
   if (universe.length) {
     if (firstWave) {
@@ -675,10 +675,10 @@ function premarketQuoteFromChart(symbol: string, payload: unknown): LiveQuote | 
   };
 }
 
-const PM_CHART_MAX = 36;
-const PM_CHART_CONCURRENCY = 4;
-const PM_CHART_BUDGET_MS = 16_000;
-const PM_UNIVERSE_SLICE = 24;
+const PM_CHART_MAX = 20;
+const PM_CHART_CONCURRENCY = 3;
+const PM_CHART_BUDGET_MS = 12_000;
+const PM_UNIVERSE_SLICE = 8;
 
 /** Premarket row from Yahoo screener when preMarketPrice is stamped (same-payload %). */
 function premarketQuoteFromScreener(q: Record<string, unknown>): LiveQuote | null {
@@ -713,8 +713,10 @@ function premarketQuoteFromScreener(q: Record<string, unknown>): LiveQuote | nul
  *
  * NEVER rank Yahoo day_gainers / Nasdaq Most Advanced regular-session % here:
  * those are yesterday's board (YXT-class) and stay elevated overnight.
- * Discover symbols (ah-discovery + Nasdaq movers + sticky + universe), then
- * quote each via includePrePost chart last vs previousClose.
+ *
+ * Fan-out is deliberately small: public CORS proxies cannot sustain 36–80
+ * chart calls per 3s poll (that caused correct→error→wrong cycling). Quote
+ * ah-discovery + sticky hot names first; only a tiny universe slice after.
  */
 async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
   const [nasdaqSeeds, universe, discoverySeeds, screenerSeeds] = await Promise.all([
@@ -722,17 +724,14 @@ async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
     loadUniverseSymbols(),
     loadAhDiscoverySymbols(),
     Promise.allSettled([
-      fetchYahooScreenerRaw("most_actives", 100, 14000, "critical"),
-      fetchYahooScreenerRaw("small_cap_gainers", 100, 14000, "normal"),
-      fetchYahooScreenerRaw("aggressive_small_caps", 100, 14000, "normal"),
-      fetchYahooScreenerRaw("day_gainers", 50, 14000, "normal"),
+      fetchYahooScreenerRaw("most_actives", 50, 12000, "critical"),
+      fetchYahooScreenerRaw("small_cap_gainers", 50, 12000, "normal"),
     ]),
   ]);
 
   const map = new Map<string, LiveQuote>();
 
-  // Screener rows with a real preMarketPrice only — never regularMarketPrice
-  // (that reintroduces yesterday's day_gainers board).
+  // Screener rows with a real preMarketPrice only — never regularMarketPrice.
   for (const res of screenerSeeds) {
     if (res.status !== "fulfilled") continue;
     for (const q of res.value) {
@@ -745,65 +744,46 @@ async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
     }
   }
 
-  const needChart = new Set<string>();
-  for (const s of [...discoverySeeds, ...nasdaqSeeds, ...pmHotSymbols]) {
-    const sym = s.toUpperCase();
-    if (sym && !isJunk(sym) && !map.has(sym)) needChart.add(sym);
+  // Chart list: discovery + sticky first. Skip huge screener/universe storms.
+  const prioritized: string[] = [];
+  for (const s of [...discoverySeeds, ...pmHotSymbols, ...nasdaqSeeds]) {
+    const sym = String(s).toUpperCase();
+    if (!sym || isJunk(sym) || map.has(sym)) continue;
+    prioritized.push(sym);
   }
-  for (const res of screenerSeeds) {
-    if (res.status !== "fulfilled") continue;
-    for (const q of res.value) {
-      const s = String(q.symbol || "")
-        .replace("/", "-")
-        .toUpperCase();
-      if (!s || isJunk(s, String(q.shortName || q.longName || ""))) continue;
-      // Still chart names without a usable preMarketPrice stamp.
-      if (!map.has(s)) needChart.add(s);
+
+  // Tiny rotating universe fill only after we already have some hot names
+  // (or on the very first wave so we can discover). Cap hard.
+  const chartMax = PM_CHART_MAX;
+  if (universe.length && prioritized.length < chartMax) {
+    const need = chartMax - prioritized.length;
+    const slice = Math.min(need, PM_UNIVERSE_SLICE, universe.length);
+    for (let i = 0; i < slice; i++) {
+      const sym = universe[(pmUniverseCursor + i) % universe.length];
+      if (sym && !isJunk(sym) && !map.has(sym)) prioritized.push(sym);
     }
+    pmUniverseCursor = (pmUniverseCursor + slice) % universe.length;
   }
 
-  const firstWave = pmHotSymbols.size < 8;
-  const chartMax = firstWave ? 48 : PM_CHART_MAX;
-
-  if (universe.length) {
-    const slice = Math.min(firstWave ? chartMax : PM_UNIVERSE_SLICE, universe.length);
-    if (firstWave) {
-      const step = Math.max(1, Math.floor(universe.length / slice));
-      for (let i = 0; i < slice; i++) {
-        const sym = universe[(i * step) % universe.length];
-        if (sym && !isJunk(sym) && !map.has(sym)) needChart.add(sym);
-      }
-    } else {
-      for (let i = 0; i < slice; i++) {
-        const sym = universe[(pmUniverseCursor + i) % universe.length];
-        if (sym && !isJunk(sym) && !map.has(sym)) needChart.add(sym);
-      }
-      pmUniverseCursor = (pmUniverseCursor + slice) % universe.length;
-    }
-  }
-
-  // Prioritize discovery / sticky — Realtime micros live here (CLRO/PAVS/…).
-  const prioritized = [
-    ...discoverySeeds,
-    ...pmHotSymbols,
-    ...nasdaqSeeds,
-    ...needChart,
-  ]
-    .map((s) => String(s).toUpperCase())
-    .filter((s) => s && !isJunk(s) && !map.has(s));
   const chartList = [...new Set(prioritized)].slice(0, chartMax);
 
   if (chartList.length) {
     const deadline = Date.now() + PM_CHART_BUDGET_MS;
+    // First 8 discovery charts are critical; the rest are normal so they
+    // cannot monopolize both queue slots and starve the next poll.
     const chartRows = await mapPool(chartList, PM_CHART_CONCURRENCY, deadline, async (symbol) => {
-      // Premarket is the active board — use critical queued transport (not only
-      // unqueued AH path) so Safari/public proxies actually deliver charts.
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d&includePrePost=true`;
+      const idx = chartList.indexOf(symbol);
+      const priority = idx >= 0 && idx < 8 ? "critical" : "normal";
       let payload: unknown;
       try {
-        payload = await fetchViaProxy(url, 12000, "critical");
+        payload = await fetchViaProxy(url, 10000, priority);
       } catch {
-        payload = await fetchAhTransport(url, 9000);
+        try {
+          payload = await fetchAhTransport(url, 8000);
+        } catch {
+          return null;
+        }
       }
       return premarketQuoteFromChart(symbol, payload);
     });
@@ -815,11 +795,11 @@ async function fetchPremarketGainerQuotes(): Promise<Map<string, LiveQuote>> {
     }
   }
 
-  if (pmHotSymbols.size > 120) {
+  if (pmHotSymbols.size > 80) {
     const ranked = [...map.values()]
       .filter((r) => pmHotSymbols.has(r.symbol))
       .sort((a, b) => b.changePct - a.changePct)
-      .slice(0, 80)
+      .slice(0, 48)
       .map((r) => r.symbol);
     pmHotSymbols.clear();
     for (const s of ranked) pmHotSymbols.add(s);
@@ -1128,18 +1108,19 @@ export async function fetchLiveScannerClient(
   if (session === "premarket") {
     const pmMap = await fetchPremarketGainerQuotes();
     let premarketMovers = rankMovers(pmMap.values());
-    if (!premarketMovers.length) {
-      throw new Error("Live premarket quotes unavailable");
-    }
-    const pmNeed = premarketMovers
-      .filter((m) => m.floatMillions == null)
-      .map((m) => m.symbol);
-    if (pmNeed.length) {
-      try {
-        const marketCaps = await fetchLiveMarketCaps(pmNeed);
-        premarketMovers = applyLiveFloatFromMcap(premarketMovers, marketCaps);
-      } catch {
-        /* leave blank */
+    // Soft-empty: do NOT throw. UI keeps the last strong same-session board
+    // instead of flashing error → wrong partial list (OPEN BUG cycle).
+    if (premarketMovers.length) {
+      const pmNeed = premarketMovers
+        .filter((m) => m.floatMillions == null)
+        .map((m) => m.symbol);
+      if (pmNeed.length) {
+        try {
+          const marketCaps = await fetchLiveMarketCaps(pmNeed);
+          premarketMovers = applyLiveFloatFromMcap(premarketMovers, marketCaps);
+        } catch {
+          /* leave blank */
+        }
       }
     }
     return {

@@ -1,11 +1,14 @@
 /**
  * Prior-session board hold (STOCK_SCANNER_APP_MEMORY.md).
  *
- * Allowed: keep the last Premarket / Gainers / After Hours board after that
- * session ends, until the next trading morning's premarket open (4:00 AM ET).
+ * Allowed:
+ *  - Keep the last Premarket / Gainers / After Hours board after that session
+ *    ends, until the next trading morning's premarket open (4:00 AM ET).
+ *  - Same-session identity stability: quality-gate so a weak/partial live poll
+ *    or transport miss does not overwrite a strong board for the *current*
+ *    window (stops correct→error→wrong cycling). Still not live.json.
  *
- * NOT allowed: using this as a mid-session LIVE fallback when a poll fails
- * during an active window, or loading live.json / floats.json.
+ * NOT allowed: loading live.json / floats.json, or inventing quotes.
  */
 import { sessionBoardTradingDayKey } from "@/lib/market";
 import type { StockMover } from "@/lib/types";

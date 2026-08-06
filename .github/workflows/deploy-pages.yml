@@ -33,6 +33,7 @@ jobs:
         env:
           GITHUB_PAGES: "true"
           NEXT_PUBLIC_POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          NEXT_PUBLIC_QUOTE_PROXY_URL: ${{ secrets.QUOTE_PROXY_URL }}
       - name: Ensure .nojekyll
         run: touch out/.nojekyll
       - uses: actions/upload-pages-artifact@v3
