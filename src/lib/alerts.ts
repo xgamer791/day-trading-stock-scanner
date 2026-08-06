@@ -189,7 +189,9 @@ export async function evaluateAlerts(
 
   if (!triggered.length) return [];
 
-  await hapticAlert();
+  // The in-hand signal. Banner + system sound are handled by iOS via
+  // `presentationOptions`; this is the part the app controls at runtime.
+  if (settings.soundEnabled) await hapticAlert();
 
   if (isNativeApp()) {
     try {
@@ -199,8 +201,12 @@ export async function evaluateAlerts(
           id: notificationId++,
           title: `${row.symbol} +${row.changePct.toFixed(2)}%`,
           body: `${row.name || row.symbol} at $${row.price}`,
-          sound: settings.soundEnabled ? undefined : "",
-          smallIcon: "ic_stat_icon",
+          // NOTE: do NOT set `sound` here. On iOS the per-notification `sound`
+          // field maps to `UNNotificationSound(named:)`, which requires an audio
+          // file bundled in the app — passing an arbitrary/empty string yields a
+          // broken sound reference, not silence. Foreground alert sound is
+          // controlled by `plugins.LocalNotifications.presentationOptions` in
+          // capacitor.config.ts instead.
         })),
       });
     } catch {

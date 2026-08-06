@@ -52,6 +52,16 @@ const config: CapacitorConfig = {
     Keyboard: {
       resize: "none",
     },
+
+    /**
+     * Alerts fire while the app is open, so foreground presentation is what matters.
+     * Without this, iOS silently swallows a notification delivered to a foregrounded
+     * app. `sound` here plays the system default — the per-notification `sound` field
+     * cannot, because it requires an audio file bundled in the app.
+     */
+    LocalNotifications: {
+      presentationOptions: ["badge", "sound", "banner", "list"],
+    },
   },
 };
 

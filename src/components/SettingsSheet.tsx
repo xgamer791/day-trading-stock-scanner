@@ -202,7 +202,7 @@ export function SettingsSheet({
               }}
             />
           </Row>
-          <Row label="Alert sound">
+          <Row label="Alert vibration" hint="Banner + sound follow your iOS notification settings">
             <Toggle on={settings.soundEnabled} onChange={(v) => patch({ soundEnabled: v })} />
           </Row>
 
