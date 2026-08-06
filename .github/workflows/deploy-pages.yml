@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,12 +37,25 @@ jobs:
           NEXT_PUBLIC_QUOTE_PROXY_URL: ${{ secrets.QUOTE_PROXY_URL }}
       - name: Ensure .nojekyll
         run: touch out/.nojekyll
-      # deploy-pages was stuck in deployment_queued (10m timeouts).
-      # Publish the static export straight to the gh-pages branch instead.
-      - name: Deploy to gh-pages
+      # Mirror to gh-pages branch (backup / branch source).
+      - name: Mirror to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./out
           force_orphan: true
           enable_jekyll: false
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Repo Pages build_type is "workflow" — this is what xgamer791.github.io serves.
+      - id: deployment
+        uses: actions/deploy-pages@v4
