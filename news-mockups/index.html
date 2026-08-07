@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>News feed mockups — Day Trading Stock Scanner</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0b0d10; color: #f2f5f9; }
+    h1 { padding: 20px 16px 8px; font-size: 20px; }
+    p { padding: 0 16px 16px; color: #9aa5b5; }
+    ol { list-style: none; padding: 0 16px 40px; margin: 0; display: grid; gap: 24px; }
+    li { border: 1px solid #232a35; padding: 12px; }
+    a { color: #3d8bfd; }
+    img { display: block; width: min(390px, 100%); height: auto; margin-top: 8px; background: #111; }
+  </style>
+</head>
+<body>
+  <h1>News feed mockups (15)</h1>
+  <p>Teatime-inspired, newest → oldest. Pick a number to ship.</p>
+  <ol id="list"></ol>
+  <script>
+    const list = document.getElementById("list");
+    for (let i = 1; i <= 15; i++) {
+      const n = String(i).padStart(2, "0");
+      const file = `news-mock-${n}.jpg`;
+      const li = document.createElement("li");
+      li.innerHTML = `<strong>#${i}</strong> — <a href="${file}">${file}</a><br/><a href="${file}"><img src="${file}" alt="News mock ${i}" loading="lazy" /></a>`;
+      list.appendChild(li);
+    }
+  </script>
+</body>
+</html>

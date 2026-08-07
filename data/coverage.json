@@ -1,0 +1,72 @@
+{
+  "updatedAt": "2026-08-07T23:31:36.307Z",
+  "description": "Top Gainers scanner screens common stocks across official US exchange directories and major index membership lists. Live ranking scrapes the full US composite market; feeds show the top 50 % gainers only.",
+  "exchanges": {
+    "NASDAQ": {
+      "symbolCount": 3562
+    },
+    "NYSE": {
+      "symbolCount": 2313
+    },
+    "NYSE American (AMEX)": {
+      "symbolCount": 273
+    },
+    "NYSE Arca": {
+      "symbolCount": 14
+    },
+    "Cboe BZX": {
+      "symbolCount": 4
+    },
+    "IEX": {
+      "symbolCount": 0
+    },
+    "Other": {
+      "symbolCount": 0
+    }
+  },
+  "indexes": {
+    "Nasdaq Composite (all NASDAQ-listed commons)": {
+      "symbolCount": 3562
+    },
+    "Nasdaq-100": {
+      "symbolCount": 50
+    },
+    "Dow Jones Industrial Average (DJIA)": {
+      "symbolCount": 30
+    },
+    "S&P 500": {
+      "symbolCount": 501
+    },
+    "S&P MidCap 400": {
+      "symbolCount": 405
+    },
+    "S&P SmallCap 600": {
+      "symbolCount": 600
+    },
+    "Russell 1000 / 2000 / 3000 (via full listed US equity universe)": {
+      "symbolCount": 6860
+    }
+  },
+  "totals": {
+    "uniqueSymbols": 6860,
+    "feedLimit": 50,
+    "ranking": "top-percent-gainers-full-us-market"
+  },
+  "marketsScreened": [
+    "NASDAQ",
+    "Nasdaq Composite (all NASDAQ-listed common stocks)",
+    "Nasdaq-100",
+    "NYSE",
+    "NYSE American (AMEX)",
+    "NYSE Arca",
+    "Cboe BZX",
+    "IEX (when present in official directory)",
+    "Dow Jones Industrial Average",
+    "S&P 500",
+    "S&P MidCap 400",
+    "S&P SmallCap 600",
+    "Russell 1000",
+    "Russell 2000",
+    "Russell 3000"
+  ]
+}
